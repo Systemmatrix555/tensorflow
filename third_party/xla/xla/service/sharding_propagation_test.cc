@@ -15,7 +15,6 @@ limitations under the License.
 
 #include "xla/service/sharding_propagation.h"
 
-#include <cstdint>
 #include <ostream>
 #include <string>
 #include <utility>
@@ -2755,6 +2754,60 @@ ENTRY %entry {
                                    "{devices=[2,2]0,1,2,3}}")
                          .value(),
                      {{}, {CreateMetadata("c"), CreateMetadata("b")}});
+  }
+}
+
+TEST_F(ShardingPropagationTest, PropagateShardingInWhileCondition) {
+  const char* const hlo_string = R"(
+HloModule module
+
+%cond {
+  %vars.cond = (u32[], f32[]) parameter(0)
+  %count.cond = u32[] get-tuple-element(%vars.cond), index=0
+  %limit = u32[] constant(10)
+  ROOT %lt = pred[] compare(%count.cond, %limit), direction=LT
+}
+
+%body {
+  %vars = (u32[], f32[]) parameter(0)
+  %count = u32[] get-tuple-element(%vars), index=0
+  %acc = f32[] get-tuple-element(%vars), index=1
+
+  %one = u32[] constant(1)
+  %count.1 = u32[] add(u32[] %count, u32[] %one)
+  %acc.1 = f32[] add(f32[] %acc, f32[] %acc)
+  ROOT %tuple = (u32[], f32[]) tuple(%count.1, %acc.1)
+}
+
+ENTRY %entry {
+  %p0 = f32[] parameter(0), sharding={devices=[2,2]<=[4] last_tile_dims={manual, replicated}}
+  %zero = u32[] constant(0), sharding={devices=[2,2]<=[4] last_tile_dims={manual, replicated}}
+  %init = (u32[], f32[]) tuple(%zero, %p0)
+  ROOT %while = (u32[], f32[]) while(%init), body=%body, condition=%cond
+})";
+
+  TF_ASSERT_OK_AND_ASSIGN(auto module,
+                          ParseAndReturnVerifiedModule(hlo_string));
+  TF_ASSERT_OK_AND_ASSIGN(
+      bool changed,
+      ShardingPropagation(/*is_spmd=*/false, /*propagate_metadata=*/false,
+                          /*allow_spmd_sharding_propagation_to_output=*/{true})
+          .Run(module.get()));
+  EXPECT_TRUE(changed);
+  HloSharding single_sharding =
+      ParseSharding("{devices=[2,2]<=[4] last_tile_dims={manual, replicated}}")
+          .value();
+  HloSharding tuple_sharding = HloSharding::SingleTuple(
+      module->entry_computation()->root_instruction()->shape(),
+      single_sharding);
+
+  for (const HloComputation* computation : module->computations()) {
+    for (const HloInstruction* instruction : computation->instructions()) {
+      EXPECT_TRUE(instruction->has_sharding());
+      EXPECT_EQ(instruction->sharding(), instruction->shape().IsTuple()
+                                             ? tuple_sharding
+                                             : single_sharding);
+    }
   }
 }
 
@@ -12003,10 +12056,9 @@ HloModule pjit_f
 
 ENTRY main.11 {
   Arg_0.1 = bf16[384,1408]{1,0} parameter(0), sharding={devices=[1,16,512]<=[8,16,64]T(1,0,2) last_tile_dim_replicate}
-  Arg_0.2 = bf16[384,1408]{1,0} parameter(1), sharding={devices=[1,16,512]<=[8,16,64]T(1,0,2) last_tile_dim_replicate}
   broadcast.4 = bf16[8,384,1408]{2,1,0} broadcast(Arg_0.1), dimensions={1,2}
   custom-call.5 = bf16[8,384,1408]{2,1,0} custom-call(broadcast.4), custom_call_target="Sharding", custom_call_has_side_effect=true, sharding={unknown shard_as 1}
-  broadcast.2 = bf16[8,384,1408]{2,1,0} broadcast(Arg_0.2), dimensions={1,2}
+  broadcast.2 = bf16[8,384,1408]{2,1,0} broadcast(Arg_0.1), dimensions={1,2}
   custom-call.3 = bf16[8,384,1408]{2,1,0} custom-call(broadcast.2), custom_call_target="Sharding", sharding={devices=[8,1,1,1024]<=[8192] last_tile_dim_replicate}, backend_config="unspecified_dims=[1,2]"
   custom-call.6 = bf16[8,384,1408]{2,1,0} custom-call(custom-call.3), custom_call_target="Sharding", custom_call_has_side_effect=true, sharding={unknown shard_as 1}
   %shard-barrier-to = bf16[8,384,1408]{2,1,0} custom-call(%custom-call.6), custom_call_target="ShardBarrierTo", custom_call_has_side_effect=true
@@ -12072,133 +12124,35 @@ ENTRY %elementwise {
           "last_tile_dim_replicate}}"));
 }
 
-TEST_F(ShardingPropagationTest, RedundantShardingInstruction1) {
-  const char* const hlo_string = R"(
+TEST_F(ShardingPropagationTest, CallPropagation) {
+  const absl::string_view hlo_string = R"(
 HloModule module
 
-ENTRY %main.6 {
-  %p0 = f32[32,96] parameter(0), sharding={replicated}
-  %add.0 = f32[32,96] add(%p0, %p0)
-  %custom-call.0 = f32[32,96] custom-call(%add.0), custom_call_target="Sharding", sharding={replicated}
-  %custom-call.1 = f32[32,96] custom-call(%custom-call.0), custom_call_target="Sharding", sharding={devices=[2,2]<=[4]}
-  ROOT %add.1 = f32[32,96] add(%custom-call.1, %custom-call.1)
-})";
-  TF_ASSERT_OK_AND_ASSIGN(auto module,
-                          ParseAndReturnVerifiedModule(hlo_string));
-  TF_ASSERT_OK_AND_ASSIGN(
-      bool changed,
-      ShardingPropagation(/*is_spmd=*/true, /*propagate_metadata=*/true,
-                          /*allow_spmd_sharding_propagation_to_output=*/{true})
-          .Run(module.get()));
-  EXPECT_TRUE(changed);
-  XLA_VLOG_LINES(1, module->ToString());
-
-  int64_t num_copy = 0;
-  for (const HloInstruction* instruction :
-       module->entry_computation()->instructions()) {
-    if (instruction->opcode() == HloOpcode::kCopy) {
-      EXPECT_THAT(instruction, op::Sharding("{devices=[2,2]<=[4]}"));
-      num_copy++;
-    }
-  }
-  EXPECT_EQ(num_copy, 1);
+called_computation {
+  p0 = bf16[20,2,68096,8512] parameter(0)
+  %add_called_comp = bf16[20,2,68096,8512] add(p0, p0)
+  ROOT tuple = (bf16[20,2,68096,8512]) tuple(add_called_comp)
 }
 
-TEST_F(ShardingPropagationTest, RedundantShardingInstruction2) {
-  const char* const hlo_string = R"(
-HloModule module
-
-ENTRY %main.6 {
-  %p0 = f32[32,96] parameter(0), sharding={replicated}
-  %add.0 = f32[32,96] add(%p0, %p0)
-  %custom-call.0 = f32[32,96] custom-call(%add.0), custom_call_target="Sharding", sharding={maximal device=0}
-  %custom-call.1 = f32[32,96] custom-call(%custom-call.0), custom_call_target="Sharding", sharding={maximal device=1}
-  %custom-call.2 = f32[32,96] custom-call(%custom-call.1), custom_call_target="Sharding", sharding={maximal device=2}
-  ROOT %add.1 = f32[32,96] add(%custom-call.2, %custom-call.2)
+ENTRY main {
+  %param0 = bf16[20,2,68096,8512] parameter(0)
+  %add = bf16[20,2,68096,8512] add(param0, param0)
+  ROOT %call = (bf16[20,2,68096,8512]) call(add), to_apply=%called_computation, sharding={{devices=[1,1,16,64]<=[64,16]T(1,0)}}
 })";
   TF_ASSERT_OK_AND_ASSIGN(auto module,
                           ParseAndReturnVerifiedModule(hlo_string));
   TF_ASSERT_OK_AND_ASSIGN(
       bool changed,
-      ShardingPropagation(/*is_spmd=*/true, /*propagate_metadata=*/true,
-                          /*allow_spmd_sharding_propagation_to_output=*/{true})
+      ShardingPropagation(
+          /*is_spmd=*/true, /*propagate_metadata=*/true,
+          /*allow_spmd_sharding_propagation_to_output=*/{false},
+          /*allow_spmd_sharding_propagation_to_parameters=*/{false})
           .Run(module.get()));
-  EXPECT_TRUE(changed);
   XLA_VLOG_LINES(1, module->ToString());
-
-  int64_t num_copy = 0;
-  for (const HloInstruction* instruction :
-       module->entry_computation()->instructions()) {
-    if (instruction->opcode() == HloOpcode::kCopy) {
-      EXPECT_THAT(instruction, op::Sharding("{maximal device=2}"));
-      num_copy++;
-    }
-  }
-  EXPECT_EQ(num_copy, 1);
-}
-
-TEST_F(ShardingPropagationTest, RedundantShardingInstruction3) {
-  // This target is similar to RedundantShardingInstruction1, except that
-  // %custom-call.0 has two users.
-  const char* const hlo_string = R"(
-HloModule module
-
-ENTRY %main.6 {
-  %p0 = f32[32,96] parameter(0), sharding={replicated}
-  %add.0 = f32[32,96] add(%p0, %p0)
-  %custom-call.0 = f32[32,96] custom-call(%add.0), custom_call_target="Sharding", sharding={replicated}
-  %custom-call.1 = f32[32,96] custom-call(%custom-call.0), custom_call_target="Sharding", sharding={devices=[2,2]<=[4]}
-  ROOT %add.1 = f32[32,96] add(%custom-call.0, %custom-call.1)
-})";
-  TF_ASSERT_OK_AND_ASSIGN(auto module,
-                          ParseAndReturnVerifiedModule(hlo_string));
-  TF_ASSERT_OK_AND_ASSIGN(
-      bool changed,
-      ShardingPropagation(/*is_spmd=*/true, /*propagate_metadata=*/true,
-                          /*allow_spmd_sharding_propagation_to_output=*/{true})
-          .Run(module.get()));
   EXPECT_TRUE(changed);
-  XLA_VLOG_LINES(1, module->ToString());
-
-  int64_t num_copy = 0;
-  for (const HloInstruction* instruction :
-       module->entry_computation()->instructions()) {
-    if (instruction->opcode() == HloOpcode::kCopy) {
-      num_copy++;
-    }
-  }
-  EXPECT_EQ(num_copy, 2);
-}
-
-TEST_F(ShardingPropagationTest, RedundantShardingInstruction4) {
-  const char* const hlo_string = R"(
-HloModule module
-
-ENTRY %main.6 {
-  %p0 = f32[32,96] parameter(0), sharding={replicated}
-  %add.0 = f32[32,96] add(%p0, %p0)
-  %custom-call.0 = f32[32,96] custom-call(%add.0), custom_call_target="Sharding", sharding={devices=[2,2]<=[2,2]T(1,0)}
-  %custom-call.1 = f32[32,96] custom-call(%custom-call.0), custom_call_target="Sharding", sharding={devices=[2,2]<=[4]}
-  ROOT %add.1 = f32[32,96] add(%custom-call.1, %custom-call.1)
-})";
-  TF_ASSERT_OK_AND_ASSIGN(auto module,
-                          ParseAndReturnVerifiedModule(hlo_string));
-  TF_ASSERT_OK_AND_ASSIGN(
-      bool changed,
-      ShardingPropagation(/*is_spmd=*/true, /*propagate_metadata=*/true,
-                          /*allow_spmd_sharding_propagation_to_output=*/{true})
-          .Run(module.get()));
-  EXPECT_TRUE(changed);
-  XLA_VLOG_LINES(1, module->ToString());
-
-  int64_t num_copy = 0;
-  for (const HloInstruction* instruction :
-       module->entry_computation()->instructions()) {
-    if (instruction->opcode() == HloOpcode::kCopy) {
-      num_copy++;
-    }
-  }
-  EXPECT_EQ(num_copy, 2);
+  auto* add = FindInstruction(module.get(), "add");
+  ASSERT_NE(add, nullptr);
+  EXPECT_THAT(add, op::Sharding("{devices=[1,1,16,64]<=[64,16]T(1,0)}"));
 }
 
 }  // namespace
