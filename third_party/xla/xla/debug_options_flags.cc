@@ -78,6 +78,7 @@ DebugOptions DefaultDebugOptionsIgnoringFlags() {
   opts.set_xla_dump_hlo_as_long_text(false);
   opts.set_xla_dump_large_constants(false);
   opts.set_xla_dump_enable_mlir_pretty_form(true);
+  opts.set_xla_gpu_unsupported_annotate_with_emitter_loc(false);
   opts.set_xla_debug_buffer_assignment_show_max(15);
 #ifdef ENABLE_MKL
   opts.set_xla_cpu_use_mkl_dnn(true);
@@ -209,7 +210,6 @@ DebugOptions DefaultDebugOptionsIgnoringFlags() {
   opts.set_xla_gpu_exhaustive_tiling_search(false);
 
   opts.set_xla_gpu_experimental_enable_triton_heroless_priority_fusion(false);
-  opts.set_xla_gpu_experimental_enable_triton_softmax_priority_fusion(true);
 
   opts.set_xla_gpu_auto_spmd_partitioning_memory_budget_gb(0);
   opts.set_xla_gpu_auto_spmd_partitioning_memory_budget_ratio(1.1);
@@ -298,7 +298,7 @@ DebugOptions DefaultDebugOptionsIgnoringFlags() {
   opts.set_xla_gpu_experimental_parallel_collective_overlap_limit(1);
   opts.set_xla_pjrt_allow_auto_layout_in_hlo(false);
   opts.set_xla_gpu_enable_scatter_determinism_expander(true);
-  opts.set_xla_gpu_unsupported_enable_ragged_all_to_all_decomposer(true);
+  opts.set_xla_gpu_unsupported_enable_ragged_all_to_all_decomposer(false);
   return opts;
 }
 
@@ -996,6 +996,15 @@ void MakeDebugOptionsFlags(std::vector<tsl::Flag>* flag_list,
       "us to dump into the directory specified by the environment variable "
       "TEST_UNDECLARED_OUTPUTS_DIR."));
   flag_list->push_back(tsl::Flag(
+      "xla_gpu_unsupported_annotate_with_emitter_loc",
+      bool_setter_for(
+          &DebugOptions::set_xla_gpu_unsupported_annotate_with_emitter_loc),
+      debug_options->xla_gpu_unsupported_annotate_with_emitter_loc(),
+      "Forces emitters that use MLIR to annotate all the created MLIR "
+      "instructions with the emitter's C++ source file and line number. The "
+      "annotations should appear in the MLIR dumps. The emitters should use "
+      "EmitterLocOpBuilder for that."));
+  flag_list->push_back(tsl::Flag(
       "xla_dump_hlo_as_text",
       bool_setter_for(&DebugOptions::set_xla_dump_hlo_as_text),
       debug_options->xla_dump_hlo_as_text(),
@@ -1676,14 +1685,6 @@ void MakeDebugOptionsFlags(std::vector<tsl::Flag>* flag_list,
       "Enable heroless Triton fusions in the PriorityFusion pass. The pass "
       "will try to make Triton fusions first and foremost where it is "
       "possible."));
-  flag_list->push_back(tsl::Flag(
-      "xla_gpu_experimental_enable_triton_softmax_priority_fusion",
-      bool_setter_for(
-          &DebugOptions::
-              set_xla_gpu_experimental_enable_triton_softmax_priority_fusion),
-      debug_options
-          ->xla_gpu_experimental_enable_triton_softmax_priority_fusion(),
-      "Enable fusion into Triton Softmax in PriorityFusion pass."));
   flag_list->push_back(tsl::Flag(
       "xla_gpu_dump_autotune_results_to",
       string_setter_for(&DebugOptions::set_xla_gpu_dump_autotune_results_to),
