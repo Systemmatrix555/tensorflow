@@ -205,6 +205,7 @@ cc_library(
         ":cpu_options",
         ":dot_op_emitter",
         ":executable_proto_cc",
+        ":fusion_wrapper",
         ":ir_emission_utils",
         ":ir_emitter",
         ":ir_emitter2",
@@ -335,7 +336,6 @@ cc_library(
         "//xla/service:while_loop_constant_sinking",
         "//xla/service:while_loop_invariant_code_motion",
         "//xla/service:while_loop_simplifier",
-        "//xla/service/cpu:fusion_wrapper",
         "//xla/service/llvm_ir:llvm_command_line_options",
         "//xla/service/llvm_ir:llvm_util",
         "//xla/service/spmd:stateful_rng_spmd_partitioner",
@@ -2061,6 +2061,35 @@ cc_library(
     deps = [
         ":onednn_contraction_rewriter",
         "//xla/service:float_support",
+    ],
+)
+
+cc_library(
+    name = "cpu_float_support",
+    hdrs = ["cpu_float_support.h"],
+    copts = tsl_copts(),
+    deps = [
+        "//xla/hlo/ir:hlo",
+        "//xla/service:float_support",
+    ],
+)
+
+xla_cc_test(
+    name = "cpu_float_support_test",
+    srcs = ["cpu_float_support_test.cc"],
+    tags = ["test_migrated_to_hlo_runner_pjrt"],
+    deps = [
+        ":cpu_float_support",
+        "//xla:xla_data_proto_cc",
+        "//xla/hlo/ir:hlo",
+        "//xla/hlo/transforms/simplifiers:float_normalization",
+        "//xla/service:hlo_runner",
+        "//xla/service:platform_util",
+        "//xla/tests:hlo_runner_agnostic_test_base",
+        "//xla/tsl/platform:statusor",
+        "//xla/tsl/platform:test",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_googletest//:gtest_main",
     ],
 )
 

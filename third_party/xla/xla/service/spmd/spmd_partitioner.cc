@@ -759,7 +759,7 @@ PartitionedHlo::ReshardAsWindowedInput(const Window& window,
   auto& cache = state_.reshard_cache->per_hlo_cache[hlo()].window_reshard_cache;
   for (auto& entry : cache) {
     if (std::get<0>(entry) == target &&
-        protobuf_util::ProtobufEquals(std::get<1>(entry), window)) {
+        protobuf_util::HaveSameSerialization(std::get<1>(entry), window)) {
       return std::get<2>(entry);
     }
   }
@@ -1124,7 +1124,7 @@ PartitionedHlo::ReshardAsWindowedInput(const Window& window,
 
   auto sharding_with_windowed_dims_replicated =
       GetShardingReplicatedOnWindowedDimension(target, window);
-  // If the currrent HLO is replicated or all windows dimensions are replicated,
+  // If the current HLO is replicated or all windows dimensions are replicated,
   // pad then slice. If the target sharding and current sharding are not the
   // same then give the halo exchange system a chance to run as it can skip
   // generating a dynamic slice.
@@ -3860,6 +3860,12 @@ absl::Status SpmdPartitioningVisitor::HandleDynamicUpdateSlice(
       auto per_partition_size_hlo = add_hlo(HloInstruction::CreateConstant(
           LiteralUtil::CreateR0<int>(per_partition_size)));
       const Shape& offset_shape = per_partition_size_hlo->shape();
+      const Shape& index_shape = new_indices[dim]->shape();
+      if (offset_shape.element_type() != index_shape.element_type())
+        new_indices[dim] = add_hlo(HloInstruction::CreateConvert(
+            ShapeUtil::ChangeElementType(index_shape,
+                                         offset_shape.element_type()),
+            new_indices[dim]));
       auto partition_offset = add_hlo(HloInstruction::CreateBinary(
           offset_shape, HloOpcode::kMultiply, partition_ordinals[dim],
           per_partition_size_hlo));
@@ -3897,6 +3903,12 @@ absl::Status SpmdPartitioningVisitor::HandleDynamicUpdateSlice(
               partition_offset)),
           add_hlo(
               HloInstruction::CreateConstant(LiteralUtil::CreateR0<int>(0)))));
+      if (new_indices[dim]->shape().element_type() !=
+          index_shape.element_type())
+        new_indices[dim] = add_hlo(HloInstruction::CreateConvert(
+            ShapeUtil::ChangeElementType(new_indices[dim]->shape(),
+                                         index_shape.element_type()),
+            new_indices[dim]));
     }
 
     // Create dynamic update slice.
