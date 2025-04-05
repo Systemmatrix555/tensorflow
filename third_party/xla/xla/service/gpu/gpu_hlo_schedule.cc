@@ -746,7 +746,7 @@ absl::Status RunAsyncCollectivesConversionPasses(HloModule* module) {
 absl::StatusOr<ScheduleMetadata> ScheduleGpuModule(
     HloModule* module, int64_t pointer_size,
     const se::DeviceDescription& gpu_device_info) {
-  tsl::profiler::TraceMe traceme("GpuCompiler::CompileToBackendResult");
+  tsl::profiler::TraceMe traceme("ScheduleGpuModule");
 
   // Tag the module with its 128 bit fingerprint. The fingerprint should include
   // instruction name with ids.
@@ -793,7 +793,7 @@ absl::StatusOr<HloSchedule> ScheduleGpuModuleWithMemoryScheduler(
     return ShapeUtil::ByteSizeOf(shape, pointer_size);
   };
   return ScheduleModule(module,
-                        DefaultModuleScheduler(size_func, PostProcessSchedule),
+                        DefaultMemoryScheduler(size_func, PostProcessSchedule),
                         /*execution_threads=*/{}, peak_memory_bytes);
 }
 
