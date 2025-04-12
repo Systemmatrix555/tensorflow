@@ -29,14 +29,9 @@ package(
 gentbl_cc_library(
     name = "stablehlo_passes_inc_gen",
     compatible_with = get_compatible_with_portable(),
-    tbl_outs = [
-        (
-            [
-                "-gen-pass-decls",
-            ],
-            "passes/passes.h.inc",
-        ),
-    ],
+    tbl_outs = {"passes/passes.h.inc": [
+        "-gen-pass-decls",
+    ]},
     tblgen = "@llvm-project//mlir:mlir-tblgen",
     td_file = "passes/passes.td",
     deps = [
@@ -48,6 +43,7 @@ cc_library(
     name = "passes",
     srcs = [
         "passes/convert_func_to_bfloat16.cc",
+        "passes/convert_shape_constraint_to_assert.cc",
         "passes/convert_xla_call_module_op_to_bfloat16.cc",
         "passes/defer_activation_transpose.cc",
         "passes/fold_constant_transpose.cc",
@@ -138,6 +134,7 @@ cc_library(
         "@llvm-project//mlir:Rewrite",
         "@llvm-project//mlir:ShapeDialect",
         "@llvm-project//mlir:Support",
+        "@llvm-project//mlir:TensorDialect",
         "@llvm-project//mlir:TransformUtils",
         "@llvm-project//mlir:Transforms",
         "@local_tsl//tsl/platform:path",
@@ -150,6 +147,7 @@ cc_library(
         "@local_xla//xla/tsl/protobuf:protos_all_cc",
         "@stablehlo//:chlo_ops",
         "@stablehlo//:stablehlo_ops",
+        "@stablehlo//:stablehlo_passes",
         "@stablehlo//:stablehlo_portable_api",
         "@stablehlo//:stablehlo_serialization",
     ],
@@ -209,12 +207,7 @@ td_library(
 gentbl_cc_library(
     name = "lift_quantizable_spots_as_functions_simple_inc_gen",
     compatible_with = get_compatible_with_portable(),
-    tbl_outs = [
-        (
-            ["-gen-rewriters"],
-            "passes/lift_quantizable_spots_as_functions_simple.inc",
-        ),
-    ],
+    tbl_outs = {"passes/lift_quantizable_spots_as_functions_simple.inc": ["-gen-rewriters"]},
     tblgen = "@llvm-project//mlir:mlir-tblgen",
     td_file = "passes/lift_quantizable_spots_as_functions_simple.td",
     deps = [
@@ -226,12 +219,7 @@ gentbl_cc_library(
 gentbl_cc_library(
     name = "lift_quantizable_spots_as_functions_fusion_inc_gen",
     compatible_with = get_compatible_with_portable(),
-    tbl_outs = [
-        (
-            ["-gen-rewriters"],
-            "passes/lift_quantizable_spots_as_functions_fusion.inc",
-        ),
-    ],
+    tbl_outs = {"passes/lift_quantizable_spots_as_functions_fusion.inc": ["-gen-rewriters"]},
     tblgen = "@llvm-project//mlir:mlir-tblgen",
     td_file = "passes/lift_quantizable_spots_as_functions_fusion.td",
     deps = [
@@ -243,12 +231,7 @@ gentbl_cc_library(
 gentbl_cc_library(
     name = "optimize_graph_inc_gen",
     compatible_with = get_compatible_with_portable(),
-    tbl_outs = [
-        (
-            ["-gen-rewriters"],
-            "passes/optimize_graph.inc",
-        ),
-    ],
+    tbl_outs = {"passes/optimize_graph.inc": ["-gen-rewriters"]},
     tblgen = "@llvm-project//mlir:mlir-tblgen",
     td_file = "passes/optimize_graph.td",
     deps = [
@@ -260,12 +243,7 @@ gentbl_cc_library(
 gentbl_cc_library(
     name = "remove_sharding_custom_call_inc_gen",
     compatible_with = get_compatible_with_portable(),
-    tbl_outs = [
-        (
-            ["-gen-rewriters"],
-            "passes/remove_sharding_custom_call.inc",
-        ),
-    ],
+    tbl_outs = {"passes/remove_sharding_custom_call.inc": ["-gen-rewriters"]},
     tblgen = "@llvm-project//mlir:mlir-tblgen",
     td_file = "passes/remove_sharding_custom_call.td",
     deps = [
@@ -276,15 +254,10 @@ gentbl_cc_library(
 gentbl_cc_library(
     name = "bridge_passes_inc_gen",
     compatible_with = get_compatible_with_portable(),
-    tbl_outs = [
-        (
-            [
-                "-gen-pass-decls",
-                "-name=Bridge",
-            ],
-            "passes/bridge/passes.h.inc",
-        ),
-    ],
+    tbl_outs = {"passes/bridge/passes.h.inc": [
+        "-gen-pass-decls",
+        "-name=Bridge",
+    ]},
     tblgen = "@llvm-project//mlir:mlir-tblgen",
     td_file = "passes/bridge/passes.td",
     deps = [
@@ -365,12 +338,7 @@ td_library(
 gentbl_cc_library(
     name = "optimize_inc_gen",
     compatible_with = get_compatible_with_portable(),
-    tbl_outs = [
-        (
-            ["-gen-rewriters"],
-            "passes/bridge/optimize.inc",
-        ),
-    ],
+    tbl_outs = {"passes/bridge/optimize.inc": ["-gen-rewriters"]},
     tblgen = "@llvm-project//mlir:mlir-tblgen",
     td_file = "passes/bridge/optimize.td",
     deps = [":optimize_td_files"],
@@ -495,15 +463,10 @@ cc_library(
 gentbl_cc_library(
     name = "stablehlo_test_passes_inc_gen",
     compatible_with = get_compatible_with_portable(),
-    tbl_outs = [
-        (
-            [
-                "-gen-pass-decls",
-                "-name=Test",
-            ],
-            "passes/testing/passes.h.inc",
-        ),
-    ],
+    tbl_outs = {"passes/testing/passes.h.inc": [
+        "-gen-pass-decls",
+        "-name=Test",
+    ]},
     tblgen = "@llvm-project//mlir:mlir-tblgen",
     td_file = "passes/testing/passes.td",
     deps = [

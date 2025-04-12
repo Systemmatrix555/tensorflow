@@ -101,6 +101,12 @@ HloInstruction* FormatShape(HloInstruction* data,
             step.output_shape, data, padding, padding_config));
         break;
       }
+      case HloOpcode::kTranspose: {
+        CHECK(step.xpose_permutation.has_value());
+        data = computation->AddInstruction(HloInstruction::CreateTranspose(
+            step.output_shape, data, *step.xpose_permutation));
+        break;
+      }
       default:
         LOG(FATAL) << "Unsupported formatting step";
     }
@@ -133,6 +139,19 @@ HloInstruction* ReverseFormatShape(
         data = computation->AddInstruction(
             HloInstruction::CreateSlice(previous_shape, data, start_indices,
                                         previous_shape.dimensions(), strides));
+        break;
+      }
+      case HloOpcode::kTranspose: {
+        CHECK(step.xpose_permutation.has_value());
+        std::vector<int64_t> reverse_permutation;
+        reverse_permutation.reserve(step.xpose_permutation->size());
+        for (int64_t i = 0; i < step.xpose_permutation->size(); ++i) {
+          reverse_permutation.push_back(
+              absl::c_find(*step.xpose_permutation, i) -
+              step.xpose_permutation->begin());
+        }
+        data = computation->AddInstruction(HloInstruction::CreateTranspose(
+            previous_shape, data, reverse_permutation));
         break;
       }
       default:
@@ -673,8 +692,9 @@ bool MergeShardingIfCompatible(const HloSharding& to_merge,
 
   std::vector<OpMetadata> merged_metadata(std::move(dst->metadata()));
   merged_metadata.reserve(merged_metadata.size() + to_merge.metadata().size());
-  const absl::flat_hash_set<OpMetadata, protobuf_util::ProtobufHashWrapper,
-                            protobuf_util::ProtobufEqualsWrapper>
+  const absl::flat_hash_set<OpMetadata,
+                            protobuf_util::ProtobufHashBySerializationFunctor,
+                            protobuf_util::HaveSameSerializationFunctor>
       metadata_set(merged_metadata.begin(), merged_metadata.end());
   absl::c_copy_if(to_merge.metadata(), std::back_inserter(merged_metadata),
                   [&metadata_set](const OpMetadata& data) {
@@ -3143,7 +3163,7 @@ std::optional<HloSharding> ReturnImprovedShardingImpl(
     bool allow_aggressive_resharding) {
   // Always allow improve the sharding if it's straightly better.
   if (to_improved != nullptr && IsShardingStrictlyBetter(from, *to_improved)) {
-    return std::move(from);
+    return from;
   }
   // We don't want to propagate tile maximal shardings.
   if (!IsSpatiallyPartitioned(from)) {
@@ -3151,7 +3171,7 @@ std::optional<HloSharding> ReturnImprovedShardingImpl(
   }
   // Any sharding is better than no sharding.
   if (to_improved == nullptr) {
-    return std::move(from);
+    return from;
   }
   // We don't want to propagate manual shardings.
   if (from.IsManual()) {
@@ -3171,7 +3191,7 @@ std::optional<HloSharding> ReturnImprovedShardingImpl(
         return std::nullopt;
       }
     }
-    return std::move(from);
+    return from;
   }
   return std::nullopt;
 }

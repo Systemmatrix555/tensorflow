@@ -637,24 +637,25 @@ Value getTosaConstRsqrt8bitTable(PatternRewriter& rewriter, Operation* op,
 }
 
 // Create a 8-bit TOSA TABLE constant tensor with int8[256] array.
-// Follow PopulateLookupTable() tensorflow/lite/kernels/activations.cc
+// Follow LUTPopulateInt8() tensorflow/lite/kernels/internal/common.h
 Value getTosaConst8bitTable(PatternRewriter& rewriter, Operation* op,
-                            double input_scale, int32_t input_zp,
-                            double output_scale, int32_t output_zp,
-                            std::function<double(double)> func) {
+                            float input_scale, int32_t input_zp,
+                            float output_scale, int32_t output_zp,
+                            std::function<float(float)> func) {
   SmallVector<int8_t, 256> table;
 
+  float inverse_scale = 1.0f / output_scale;
   for (int32_t i = -128; i < 128; i++) {
-    double dequantized = input_scale * (i - input_zp);
-    double transformed = func(dequantized);
+    float dequantized = input_scale * (i - input_zp);
+    float transformed = func(dequantized);
 
-    double max = (output_scale > 1.0) ? DBL_MAX : (DBL_MAX * output_scale);
+    float max = (output_scale > 1.0) ? FLT_MAX : (FLT_MAX * output_scale);
     if (transformed >= max) {
       table.push_back(INT8_MAX);
       continue;
     }
 
-    int32_t rescaled = std::llround(transformed / output_scale);
+    int32_t rescaled = std::round(transformed * inverse_scale);
     int32_t quantized = static_cast<int32_t>(rescaled + output_zp);
     table.push_back(
         static_cast<int8_t>(std::min(std::max(quantized, -128), 127)));
@@ -673,34 +674,52 @@ Value getTosaConst8bitTable(PatternRewriter& rewriter, Operation* op,
   return const_op.getResult();
 }
 
-// Create a 16-bit TOSA TABLE constant tensor with int16[513] array.
-// Output is restricted to [-1.0, 1.0].
-// Follow gen_lut() tensorflow/lite/kernels/internal/common.h
+// Create a 16-bit TOSA TABLE constant tensor.
+// A float should be used by default for FloatT except if a double is required
+// for backward compatibility.
+// Follow LUTPopulateInt16() tensorflow/lite/kernels/internal/common.h
+template <typename FloatT>
 Value getTosaConst16bitTable(PatternRewriter& rewriter, Operation* op,
-                             std::function<double(double)> func, double min,
-                             double max) {
+                             FloatT input_scale, int32_t input_zp,
+                             FloatT output_scale, int32_t output_zp,
+                             std::function<FloatT(FloatT)> func) {
+  static_assert(std::is_floating_point<FloatT>::value,
+                "FloatT must be a floating-point type.");
+
   SmallVector<int16_t, 513> table;
 
-  double step = (max - min) / 512.0f;
-  double half_step = step / 2.0f;
+  FloatT input_min =
+      input_scale * (std::numeric_limits<int16_t>::min() - input_zp);
+  FloatT input_max =
+      input_scale * (std::numeric_limits<int16_t>::max() - input_zp);
+  FloatT output_min =
+      output_scale * (std::numeric_limits<int16_t>::min() - output_zp);
+  FloatT output_max =
+      output_scale * (std::numeric_limits<int16_t>::max() - output_zp);
+
+  FloatT step = (input_max - input_min) / 512;
+  FloatT half_step = step / 2;
+  FloatT output_scaling_inv = 65536 / (output_max - output_min);
+
   for (int32_t i = 0; i < 512; i++) {
-    int32_t sample_val = std::llround(func(min + (i * step)) * 32768.0);
-    double midpoint_interp_val =
-        std::round(((func(min + (i + 1) * step) * 32768.0) +
-                    std::round(func(min + (i * step)) * 32768.0)) /
-                   2.0);
-    double midpoint_val =
-        std::round(func(min + (i * step) + half_step) * 32768.0);
-    double midpoint_err = midpoint_interp_val - midpoint_val;
-    int32_t bias = std::llround(midpoint_err / 2.0);
+    FloatT sample_val =
+        std::round(func(input_min + (i * step)) * output_scaling_inv);
+    FloatT midpoint_interp_val = std::round(
+        ((func(input_min + (i + 1) * step) * output_scaling_inv) +
+         std::round(func(input_min + (i * step)) * output_scaling_inv)) /
+        2);
+    FloatT midpoint_val = std::round(func(input_min + (i * step) + half_step) *
+                                     output_scaling_inv);
+    FloatT midpoint_err = midpoint_interp_val - midpoint_val;
+    FloatT bias = std::round(midpoint_err / 2);
 
     table.push_back(static_cast<int16_t>(
-        std::min(std::max(sample_val - bias, -32768), 32767)));
+        std::min<FloatT>(std::max<FloatT>(sample_val - bias, -32768), 32767)));
   }
 
-  int32_t max_val = std::llround(func(max) * 32768.0);
-  table.push_back(
-      static_cast<int16_t>(std::min(std::max(max_val, -32768), 32767)));
+  FloatT max_val = std::round(func(input_max) * output_scaling_inv);
+  table.push_back(static_cast<int16_t>(
+      std::min<FloatT>(std::max<FloatT>(max_val, -32768), 32767)));
 
   auto const_type =
       tensorflow::GetTypeFromTFTensorShape({513}, rewriter.getIntegerType(16));
@@ -710,6 +729,18 @@ Value getTosaConst16bitTable(PatternRewriter& rewriter, Operation* op,
       rewriter.create<tosa::ConstOp>(op->getLoc(), const_type, const_attr);
   return const_op.getResult();
 }
+
+template Value getTosaConst16bitTable<float>(PatternRewriter& rewriter,
+                                             Operation* op, float input_scale,
+                                             int32_t input_zp,
+                                             float output_scale,
+                                             int32_t output_zp,
+                                             std::function<float(float)> func);
+
+template Value getTosaConst16bitTable<double>(
+    PatternRewriter& rewriter, Operation* op, double input_scale,
+    int32_t input_zp, double output_scale, int32_t output_zp,
+    std::function<double(double)> func);
 
 // Create a 32-bit TOSA TABLE for Softmax Exp
 void getTosaConst32bitSoftmaxExpTable(PatternRewriter& rewriter, Operation* op,
@@ -1036,14 +1067,14 @@ bool getTransposeConv2dPaddingValues(
       return false;
     }
 
-    int total_padding = ((ifm_size - 1) * dim_stride + filter_size - ofm_size);
-    total_padding = total_padding > 0 ? total_padding : 0;
+    int total_padding =
+        ((ifm_size - 1) * dim_stride + filter_size - ofm_size);
 
     pad_before = total_padding / 2;
     pad_after = total_padding - pad_before;
 
-    computed_paddings.push_back(pad_before);
-    computed_paddings.push_back(pad_after);
+    computed_paddings.push_back(-pad_before);
+    computed_paddings.push_back(-pad_after);
   }
 
   explicit_padding = rewriter.getDenseI64ArrayAttr(computed_paddings);
@@ -1380,6 +1411,37 @@ LogicalResult broadcastLowRankTensor(PatternRewriter& rewriter, Operation* op,
     input2 = low_rank_tensor;
   }
   return success();
+}
+
+bool checkUniqueConstantScatterIndices(ShapedType indices_type,
+                                       ShapedType result_type,
+                                       ElementsAttr const_data) {
+  llvm::ArrayRef<int64_t> const indices_shape = indices_type.getShape();
+  const unsigned int indices_rank = indices_shape.size();
+  const unsigned int result_rank = result_type.getRank();
+  const unsigned int last_dim_size = indices_shape[indices_rank - 1];
+
+  // Reconstruct each index from the unshaped constant data array and
+  // calculate the corresponding flattened index
+  auto const const_data_range = const_data.getValues<int32_t>();
+  assert((const_data_range.size() % last_dim_size == 0) &&
+         "Constant data length should be a multiple of indices_shape[-1]");
+
+  std::vector<int64_t> flattened_indices;
+  flattened_indices.reserve(const_data_range.size() / last_dim_size);
+  for (auto beg = const_data_range.begin(); beg < const_data_range.end();
+       beg += last_dim_size) {
+    std::vector<uint64_t> current_single_index(result_rank);
+    std::copy(beg, beg + last_dim_size, current_single_index.begin());
+    const uint64_t f_index{
+        ElementsAttr::getFlattenedIndex(result_type, current_single_index)};
+    flattened_indices.push_back(f_index);
+  }
+
+  // If adjacent flattened values are found, there are non-unique indices
+  std::sort(flattened_indices.begin(), flattened_indices.end());
+  return std::adjacent_find(flattened_indices.begin(),
+                            flattened_indices.end()) == flattened_indices.end();
 }
 
 }  // namespace tosa

@@ -144,7 +144,7 @@ TEST_F(FunctionalHloRunnerTest, GPUProfilerWithEmptyDumpPathReturnsError) {
   }
   std::string empty_profile_dump_path = "";
   EXPECT_THAT(
-      GPURunnerProfiler::Create(empty_profile_dump_path, /*keep_xspace=*/true),
+      HLORunnerProfiler::Create(empty_profile_dump_path, /*keep_xspace=*/true),
       StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
@@ -161,7 +161,7 @@ TEST_F(FunctionalHloRunnerTest, GPUProfilerKeepXSpaceReturnsNonNullXSpace) {
   FunctionalHloRunner::RunningOptions running_options;
   TF_ASSERT_OK_AND_ASSIGN(
       auto profiler,
-      GPURunnerProfiler::Create(profile_dump_path, /*keep_xspace=*/true));
+      HLORunnerProfiler::Create(profile_dump_path, /*keep_xspace=*/true));
   running_options.profiler = profiler.get();
 
   profiler->CreateSession();
@@ -178,11 +178,11 @@ TEST_F(FunctionalHloRunnerTest,
   std::string profile_dump_path =
       tsl::io::JoinPath(testing::TempDir(), "xspace.pb");
 
-  std::unique_ptr<GPURunnerProfiler> profiler;
+  std::unique_ptr<HLORunnerProfiler> profiler;
   FunctionalHloRunner::RunningOptions running_options;
   TF_ASSERT_OK_AND_ASSIGN(
       profiler,
-      GPURunnerProfiler::Create(profile_dump_path, /*keep_xspace=*/true));
+      HLORunnerProfiler::Create(profile_dump_path, /*keep_xspace=*/true));
   running_options.profiler = profiler.get();
 
   running_options.num_repeats = 2;
@@ -384,6 +384,34 @@ void CompileAndFilecheck(
                                       &ir_paths));
     ASSERT_THAT(ir_paths, SizeIs(1));
   }
+}
+
+TEST_F(FunctionalHloRunnerTest, KeepLayoutsFromHloModule) {
+  FunctionalHloRunner::PreprocessingOptions preproc_options;
+  preproc_options.use_layouts_from_hlo_module = true;
+
+  CompileAndFilecheck(GetHloPath("single_device.hlo"),
+                      // Check that non-standard layouts are preserved.
+                      R"(
+// CHECK: entry_computation_layout={(f32[2,2]{0,1})->f32[2,2]{0,1}}
+// CHECK: f32[2,2]{0,1} parameter(0)
+// CHECK: ROOT {{.*}} = f32[2,2]{0,1}
+)",
+                      preproc_options,
+                      FunctionalHloRunner::HloPassesMode::kStandardCompile,
+                      /*num_partitions=*/1);
+}
+
+TEST_F(FunctionalHloRunnerTest, AutoLayoutAssignsNonDefaultLayout) {
+  if (IsTestingCpu()) GTEST_SKIP() << "CPU doesn't support auto-layout yet.";
+  FunctionalHloRunner::PreprocessingOptions preproc_options;
+  preproc_options.use_layouts_from_hlo_module = true;
+  CompileAndFilecheck(GetHloPath("auto_layout.hlo"),
+                      // Makes LHS contracting dimension minor.
+                      "// CHECK: entry_computation_layout={(bf16[4096,64,8]{0",
+                      preproc_options,
+                      FunctionalHloRunner::HloPassesMode::kStandardCompile,
+                      /*num_partitions=*/1);
 }
 
 TEST_F(FunctionalHloRunnerTest, CanCompileWithoutHavingEnoughGpus) {

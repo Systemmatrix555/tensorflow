@@ -98,6 +98,7 @@ struct HloRunnerConfig {
   int32_t while_execution_count = -1;
   bool remove_infeed_outfeed = true;
   bool compile_as_stablehlo = false;
+  bool use_layouts_from_hlo_module = false;
   int32_t num_repeats = 1;
   std::string execution_options_path = "";
   int64_t gpu_client_initialization_timeout_sec = 300;
@@ -235,7 +236,7 @@ static absl::Status RunMultihostHloRunner(int argc, char** argv,
   QCHECK_LT(opts.gpu_client_mem_fraction, 1.0);
 
   PjRtEnvironment env;
-  std::unique_ptr<GPURunnerProfiler> gpu_runner_profiler;
+  std::unique_ptr<HLORunnerProfiler> hlo_runner_profiler;
   if (opts.device_type_str == "gpu") {
     xla::GpuClientOptions gpu_options;
     gpu_options.node_id = opts.task_id;
@@ -249,13 +250,19 @@ static absl::Status RunMultihostHloRunner(int argc, char** argv,
     // Create a GPURunnerProfiler to profile GPU executions to save xspace data
     // to disk.
     if (env.client != nullptr && !opts.xla_gpu_dump_xspace_to.empty()) {
-      TF_ASSIGN_OR_RETURN(gpu_runner_profiler,
-                          GPURunnerProfiler::Create(opts.xla_gpu_dump_xspace_to,
+      TF_ASSIGN_OR_RETURN(hlo_runner_profiler,
+                          HLORunnerProfiler::Create(opts.xla_gpu_dump_xspace_to,
                                                     /*keep_xspace=*/false));
-      running_options.profiler = gpu_runner_profiler.get();
+      running_options.profiler = hlo_runner_profiler.get();
     }
   } else if (opts.device_type_str == "host") {
     TF_ASSIGN_OR_RETURN(env, xla::GetPjRtEnvironmentForHostCpu());
+    if (env.client != nullptr && !opts.xla_gpu_dump_xspace_to.empty()) {
+      TF_ASSIGN_OR_RETURN(hlo_runner_profiler,
+                          HLORunnerProfiler::Create(opts.xla_gpu_dump_xspace_to,
+                                                    /*keep_xspace=*/false));
+      running_options.profiler = hlo_runner_profiler.get();
+    }
   } else {
     return absl::InvalidArgumentError(
         absl::StrCat("Unrecognized device type ", opts.device_type_str,
@@ -355,6 +362,10 @@ int main(int argc, char** argv) {
       tsl::Flag("compile_as_stablehlo", &opts.compile_as_stablehlo,
                 "If set, convert the module to StableHLO before passing to "
                 "PjRt for compilation."),
+      tsl::Flag("use_layouts_from_hlo_module",
+                &opts.use_layouts_from_hlo_module,
+                "If set, use layouts from the HLO module's "
+                "entry_computation_layout."),
       tsl::Flag("num_repeats", &opts.num_repeats,
                 "Repeatedly execute the HLO for this many times."),
       tsl::Flag("execution_options_path", &opts.execution_options_path,

@@ -177,24 +177,6 @@ HeuristicLayoutAssignment(const HloInstruction* instr,
         instr->shape().tuple_shapes(0).dimensions_size() != 4) {
       return kAllNCHW;
     }
-
-    // Empirically we've found with Volta and cudnn <= 7.3 that backward-input
-    // convs with stride are significantly faster with NCHW layouts.
-    //
-    // We could have used a mixed layout combination, e.g. (NHWC, NCHW, NCHW),
-    // which on paper gives good performance. However, there are two
-    // observations:
-    // * a mixed layout combination is more cuDNN-bug prone, based on empirical
-    //   evidence.
-    // * we've also observed that for mixed layouts, cuDNN transposes data back
-    //   and forth from a different layout combination. If we end up with
-    //   transposes anyway, we prefer to have them in XLA, as they can be fused.
-    if (std::make_tuple(dnn_version.major_version(),
-                        dnn_version.minor_version()) <= std::make_tuple(7, 3) &&
-        instr->custom_call_target() == kCudnnConvBackwardInputCallTarget &&
-        window_util::HasStride(instr->window())) {
-      return kAllNCHW;
-    }
   } else if (std::holds_alternative<se::RocmComputeCapability>(gpu_version)) {
     bool is_enabled = false;
     TF_CHECK_OK(tsl::ReadBoolFromEnvVar("TF_USE_ROCM_NHWC",
@@ -340,6 +322,15 @@ bool IsPackedInstruction(const HloInstruction* instruction) {
               instruction->operand(0)->shape().element_type()));
 }
 
+bool IsCustomCallToMemoryPlacement(const HloInstruction* hlo) {
+  if (hlo->opcode() != HloOpcode::kCustomCall) {
+    return false;
+  }
+  const std::string& target = hlo->custom_call_target();
+  return target == memory_annotations::kMoveToDeviceCustomCallTarget ||
+         target == memory_annotations::kMoveToHostCustomCallTarget;
+}
+
 }  // namespace
 
 absl::Status GpuLayoutAssignment::AddDotBackendConstraints(
@@ -379,20 +370,12 @@ absl::Status GpuLayoutAssignment::AddDotBackendConstraints(
   // dimensions. Additionally, no batch dimension can be in the most
   // minor physical dimension for inputs or the output.
 
-  const bool xla_gpu_ensure_minor_dot_contraction_dims =
-      instruction->GetModule()
-          ->config()
-          .debug_options()
-          .xla_gpu_ensure_minor_dot_contraction_dims();
   const bool pack_along_contracting_dims =
       instruction->GetModule()
           ->config()
           .debug_options()
           .xla_gpu_experimental_pack_dot_operands_along_k_dimension();
 
-  const bool is_bf16_to_bf16 =
-      (output_type == PrimitiveType::BF16 && lhs.type == PrimitiveType::BF16 &&
-       rhs.type == PrimitiveType::BF16);
   const bool is_s8_to_s32 = output_type == PrimitiveType::S32 &&
                             lhs.type == PrimitiveType::S8 &&
                             rhs.type == PrimitiveType::S8;
@@ -404,7 +387,6 @@ absl::Status GpuLayoutAssignment::AddDotBackendConstraints(
   const se::CudaComputeCapability* cc =
       std::get_if<se::CudaComputeCapability>(&gpu_version_);
   const bool both_operands_require_minor_contraction_dims =
-      (is_bf16_to_bf16 && xla_gpu_ensure_minor_dot_contraction_dims) ||
       is_s8_to_s32 || (is_fp8 && !(cc && cc->IsBlackwell()));
 
   for (const Side& side : {lhs, rhs}) {
@@ -571,6 +553,13 @@ absl::Status GpuLayoutAssignment::AddBackendConstraints(
             LayoutUtil::SetToDefaultLayout(subshape);
           });
       TF_RETURN_IF_ERROR(SetInstructionLayout(s, instruction));
+    } else if (IsCustomCallToMemoryPlacement(instruction)) {
+      // Make sure that host memory buffers use the default layout so that
+      // the compiler does not insert transposes on host memory buffers.
+      Shape operand_shape = instruction->operand(0)->shape();
+      LayoutUtil::SetToDefaultLayout(&operand_shape);
+      TF_RETURN_IF_ERROR(SetOperandLayout(operand_shape, instruction, 0));
+      TF_RETURN_IF_ERROR(SetInstructionLayout(operand_shape, instruction));
     }
   }
   return absl::OkStatus();
@@ -691,19 +680,12 @@ bool GpuLayoutAssignment::PropagateReductionLayoutToOperand(
 
 bool GpuLayoutAssignment::InstructionCanChangeLayoutInstance(
     const HloInstruction* instruction) {
-  // The host offloading custom calls will be eventually removed
-  // by the offloader, so we need to make sure that the calls do not change
-  // the layout and thus cause layout mismatches after the removal.
   // The TopK custom call cannot handle the case if the operand has a different
   // layout.
   const HloCustomCallInstruction* custom_call =
       DynCast<HloCustomCallInstruction>(instruction);
   if (custom_call != nullptr &&
-      (custom_call->custom_call_target() ==
-           memory_annotations::kMoveToHostCustomCallTarget ||
-       custom_call->custom_call_target() ==
-           memory_annotations::kMoveToDeviceCustomCallTarget ||
-       custom_call->custom_call_target() == kTopKCustomCallTarget)) {
+      custom_call->custom_call_target() == kTopKCustomCallTarget) {
     return false;
   }
 

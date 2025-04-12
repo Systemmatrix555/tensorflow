@@ -107,16 +107,6 @@ cc_library(
 )
 
 cc_library(
-    name = "verified_hlo_module",
-    testonly = True,
-    hdrs = ["verified_hlo_module.h"],
-    deprecation = "This library is deprecated and will be removed in February 2025. Use //third_party/tensorflow/compiler/xla/hlo/testlib:verified_hlo_module instead.",
-    deps = [
-        "//xla/hlo/testlib:verified_hlo_module",
-    ],
-)
-
-cc_library(
     name = "pjrt_client_registry",
     srcs = ["pjrt_client_registry.cc"],
     hdrs = ["pjrt_client_registry.h"],
@@ -270,6 +260,7 @@ cc_library(
         "//xla/tsl/platform:test",
         "@com_google_absl//absl/base:nullability",
         "@com_google_absl//absl/log",
+        "@com_google_absl//absl/status",
         "@com_google_absl//absl/strings:string_view",
         "@com_google_absl//absl/types:span",
     ],
@@ -338,6 +329,7 @@ cc_library(
     srcs = ["client_library_test_base.cc"],
     hdrs = ["client_library_test_base.h"],
     deps = [
+        ":client_library_test_runner_utils",
         ":literal_test_util",
         ":test_utils",
         "//xla:array2d",
@@ -375,6 +367,7 @@ cc_library(
     testonly = True,
     hdrs = ["client_library_test_runner_mixin.h"],
     deps = [
+        ":client_library_test_runner_utils",
         ":hlo_runner_agnostic_test_base",
         ":literal_test_util",
         "//xla:array2d",
@@ -397,6 +390,23 @@ cc_library(
         "//xla/tsl/platform:logging",
         "//xla/tsl/platform:statusor",
         "//xla/tsl/platform:test",
+        "@com_google_absl//absl/types:span",
+    ],
+)
+
+cc_library(
+    name = "client_library_test_runner_utils",
+    testonly = True,
+    srcs = ["client_library_test_runner_utils.cc"],
+    hdrs = ["client_library_test_runner_utils.h"],
+    deps = [
+        ":test_utils",
+        "//xla:array2d",
+        "//xla:shape_util",
+        "//xla/hlo/builder:xla_builder",
+        "//xla/hlo/builder:xla_computation",
+        "//xla/tsl/platform:status",
+        "@com_google_absl//absl/log:check",
         "@com_google_absl//absl/types:span",
     ],
 )
@@ -427,16 +437,6 @@ cc_library(
         "//xla/hlo/ir:hlo",
         "//xla/service:compiler",
         "//xla/service:executable",
-    ],
-)
-
-cc_library(
-    name = "filecheck",
-    testonly = True,
-    hdrs = ["filecheck.h"],
-    deprecation = "This library is deprecated and will be removed in February 2025. Use //third_party/tensorflow/compiler/xla/hlo/testlib:filecheck instead.",
-    deps = [
-        "//xla/hlo/testlib:filecheck",
     ],
 )
 
@@ -1214,21 +1214,28 @@ xla_test(
 xla_test(
     name = "scatter_test",
     srcs = ["scatter_test.cc"],
-    tags = ["test_xla_cpu_no_thunks"],
-    # TODO(b/245550554): enable Pjrt runner for scatter test once it's fixed.
+    tags = [
+        "test_migrated_to_hlo_runner_pjrt",
+        "test_xla_cpu_no_thunks",
+    ],
     deps = [
-        ":client_library_test_base",
-        ":hlo_test_base",
+        ":hlo_pjrt_interpreter_reference_mixin",
+        ":hlo_pjrt_test_base",
+        ":literal_test_util",
         ":test_macros_header",
         ":xla_internal_test_main",
         "//xla:array2d",
         "//xla:error_spec",
         "//xla:literal",
+        "//xla:literal_util",
         "//xla:shape_util",
-        "//xla:status_macros",
         "//xla:types",
+        "//xla/hlo/ir:hlo",
         "//xla/hlo/testlib:test",
+        "//xla/service:hlo_module_config",
+        "//xla/tsl/platform:statusor",
         "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/types:span",
     ],
 )
 
@@ -2547,24 +2554,28 @@ xla_test(
 xla_test(
     name = "concat_test",
     srcs = ["concat_test.cc"],
-    tags = ["test_xla_cpu_no_thunks"],
+    tags = [
+        "test_migrated_to_hlo_runner_pjrt",
+        "test_xla_cpu_no_thunks",
+    ],
     deps = [
-        ":client_library_test_base",
-        ":hlo_test_base",
-        ":literal_test_util",
+        ":client_library_test_runner_mixin",
+        ":client_library_test_runner_utils",
+        ":hlo_pjrt_interpreter_reference_mixin",
+        ":hlo_pjrt_test_base",
         ":test_macros_header",
         ":xla_internal_test_main",
         "//xla:array2d",
         "//xla:array3d",
+        "//xla:error_spec",
         "//xla:literal_util",
         "//xla:reference_util",
-        "//xla/client:local_client",
+        "//xla:shape_util",
         "//xla/hlo/builder:xla_builder",
         "//xla/hlo/builder:xla_computation",
         "//xla/hlo/testlib:test",
         "//xla/hlo/testlib:test_helpers",
         "@com_google_absl//absl/status:statusor",
-        "@local_tsl//tsl/platform:test",
     ],
 )
 
@@ -2954,13 +2965,13 @@ xla_test(
         ":test_macros_header",
         ":xla_internal_test_main",
         "//xla:literal",
-        "//xla:protobuf_util",
         "//xla:shape_util",
         "//xla:xla_data_proto_cc",
         "//xla/client:local_client",
         "//xla/hlo/builder:xla_builder",
         "//xla/hlo/builder:xla_computation",
         "//xla/service:hlo_proto_cc",
+        "//xla/tsl/util/proto:proto_matchers",
         "@com_google_absl//absl/status:statusor",
         "@local_tsl//tsl/platform:test",
     ],

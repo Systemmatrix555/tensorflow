@@ -102,25 +102,6 @@ class HloVerifierTestLayoutFusion : public HloTestBase {
                     /*allow_mixed_precision_in_hlo_verifier=*/false) {}
 };
 
-TEST_F(HloVerifierTest, NullInstructionParent) {
-  HloComputation::Builder builder(TestName());
-  const Shape scalar_shape = ShapeUtil::MakeShape(F32, {});
-  HloInstruction* param = builder.AddInstruction(
-      HloInstruction::CreateParameter(0, scalar_shape, "param"));
-  HloInstruction* negate = builder.AddInstruction(
-      HloInstruction::CreateUnary(scalar_shape, HloOpcode::kNegate, param));
-  auto module = CreateUnverifiedModule();
-  module->AddEntryComputation(builder.Build());
-
-  TF_ASSERT_OK(verifier().Run(module.get()).status());
-
-  negate->set_parent(nullptr);
-
-  auto status = verifier().Run(module.get()).status();
-  ASSERT_FALSE(status.ok());
-  EXPECT_THAT(status.message(), HasSubstr("has a null parent pointer"));
-}
-
 TEST_F(HloVerifierTest, DifferentOperandParents) {
   HloComputation::Builder builder(TestName());
   const Shape scalar_shape = ShapeUtil::MakeShape(F32, {});
@@ -834,6 +815,41 @@ TEST_F(HloVerifierTestLayoutSensitive, ConcatWithLayoutChangeNotAllowed) {
   ASSERT_FALSE(status.ok());
   EXPECT_THAT(status.message(),
               HasSubstr("Instruction shouldn't change layouts"));
+}
+
+TEST_F(HloVerifierTestLayoutSensitive,
+       ScatterIgnoreElementSizeForLayoutComparison) {
+  const char* const kScatterHlo = R"(
+    HloModule module
+    overwrite {
+      %p0 = s4[] parameter(0)
+      ROOT %p1 = s4[] parameter(1)
+    }
+
+    scatter {
+      %operand = s4[2048, 2048]{1,0:E(4)}  parameter(0)
+      %update = s4[32, 16, 32]{2,1,0} parameter(1)
+      %iota = s32[8, 4]{1,0} iota(), iota_dimension=0
+      %indices = s32[32, 1]{1,0} reshape(%iota)
+
+      ROOT %scatter = s4[2048, 2048]{1,0:E(4)} scatter(
+          s4[2048, 2048]{1,0} %operand,
+          s32[32, 1]{1,0} %indices,
+          s4[32, 16, 32]{2,1,0} %update
+        ),
+        update_window_dims={1,2},
+        inserted_window_dims={},
+        scatter_dims_to_operand_dims={0},
+        index_vector_dim=1,
+        unique_indices=false,
+        indices_are_sorted=true,
+        to_apply=overwrite
+    }
+  )";
+  TF_ASSERT_OK_AND_ASSIGN(auto module,
+                          ParseAndReturnUnverifiedModule(kScatterHlo));
+  auto status = verifier().Run(module.get()).status();
+  EXPECT_TRUE(status.ok());
 }
 
 TEST_F(HloVerifierTestLayoutSensitive, BitcastNeedsSameNumberOfElements) {

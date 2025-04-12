@@ -759,13 +759,15 @@ absl::StatusOr<XlaComputation> XlaBuilder::Build(
   // the backend.
   if (remove_dynamic_dimensions) {
     std::function<void(Shape*)> remove_dynamic_dimension = [&](Shape* shape) {
-      if (shape->tuple_shapes_size() != 0) {
+      if (shape->IsTuple()) {
         for (int i = 0; i < shape->tuple_shapes_size(); ++i) {
           remove_dynamic_dimension(shape->mutable_tuple_shapes(i));
         }
       }
-      for (int64_t i = 0; i < shape->dimensions_size(); ++i) {
-        shape->set_dynamic_dimension(i, false);
+      if (shape->IsArray()) {
+        for (int64_t i = 0; i < shape->dimensions_size(); ++i) {
+          shape->set_dynamic_dimension(i, false);
+        }
       }
     };
     for (size_t index = 0; index < instructions_.size(); ++index) {
@@ -811,7 +813,7 @@ absl::StatusOr<XlaComputation> XlaBuilder::Build(
   this->embedded_.clear();
   this->parameter_numbers_.clear();
 
-  return std::move(computation);
+  return computation;
 }
 
 /* static */ absl::Status XlaBuilder::PopulateInputOutputAliasAndBufferDonor(
@@ -2286,7 +2288,7 @@ absl::StatusOr<HloInstructionProto> XlaBuilder::DynamicConvInstruction(
   if (precision_config != nullptr) {
     *instr.mutable_precision_config() = *precision_config;
   }
-  return std::move(instr);
+  return instr;
 }
 
 XlaOp XlaBuilder::DynamicConvInputGrad(
@@ -3079,9 +3081,11 @@ XlaOp XlaBuilder::RngBitGenerator(RandomAlgorithm algorithm,
   return ReportErrorOrReturn([&]() -> absl::StatusOr<XlaOp> {
     TF_RETURN_IF_ERROR(ShapeUtil::ValidateShapeWithOptionalLayout(shape));
     TF_ASSIGN_OR_RETURN(Shape state_shape, GetShape(initial_state));
-    Shape output_shape = shape;
-    output_shape.set_element_type(PRIMITIVE_TYPE_INVALID);
-    if (primitive_util::IsArrayType(shape.element_type())) {
+    Shape output_shape;  // An invalid shape by default.
+    if (shape.IsArray()) {
+      // Make output_shape the same as the input shape, but with an unsigned
+      // integral type.
+      output_shape = shape;
       output_shape.set_element_type(
           primitive_util::UnsignedIntegralTypeForBitWidth(
               primitive_util::BitWidth(shape.element_type())));
@@ -4741,7 +4745,7 @@ absl::StatusOr<XlaComputation> XlaBuilder::BuildConstantSubGraph(
   if (VLOG_IS_ON(4)) {
     VLOG(4) << "Constant computation:\n" << module->DebugString();
   }
-  return std::move(computation);
+  return computation;
 }
 
 std::unique_ptr<XlaBuilder> XlaBuilder::CreateSubBuilder(
