@@ -163,8 +163,7 @@ bool CheckAffineQuantization(
                        TfLiteTypeGetName(tensor.type), t);
     return false;
   }
-  if (quantization_params.scale->size != quantization_params.zero_point->size &&
-      quantization_params.zero_point->size != 1) {
+  if (quantization_params.scale->size != quantization_params.zero_point->size) {
     TF_LITE_KERNEL_LOG(context,
                        "mismatching number of scale (%d) and zero "
                        "point (%d) quantization parameters for %s "
@@ -207,8 +206,7 @@ bool CheckZeroPointForPerTensorQuantization(
 bool CheckZeroPointForPerChannelQuantization(
     TfLiteContext* context, const TfLiteTensor& tensor, int t,
     const TfLiteIntArray& quantization_zero_point) {
-  // All zero points must be 0, except for INT4 tensors where it can also
-  // be 8.
+  // All zero points must be 0, except for INT4 tensors where it can also be 8.
   for (int c = 0; c < quantization_zero_point.size; c++) {
     const int zero_point = quantization_zero_point.data[c];
     if (zero_point != 0 && (tensor.type != kTfLiteInt4 && zero_point != 8)) {
@@ -262,7 +260,7 @@ xnn_datatype GetXNNPackDatatype(TfLiteContext* context,
       // CheckAffineQuantization already checks if it is the same as
       // quantization_params->scale->size.
       if (!CheckZeroPointForPerTensorQuantization<uint8_t>(
-              context, tensor, t, *quantization_params->zero_point)) {
+              context, tensor, t, *(quantization_params->zero_point))) {
         return xnn_datatype_invalid;
       }
       return xnn_datatype_quint8;
@@ -515,19 +513,18 @@ TfLiteStatus DefineXNNPACKValue(TfLiteContext* context, xnn_subgraph_t subgraph,
   switch (datatype) {
     case xnn_datatype_qint8:
     case xnn_datatype_quint8:
-    case xnn_datatype_qint32: {
-      const TfLiteAffineQuantization* quantization_params =
-          static_cast<const TfLiteAffineQuantization*>(
-              tensor.quantization.params);
-      int32_t zero_point = quantization_params->zero_point->data[0];
+    case xnn_datatype_qint32:
       status = xnn_define_quantized_tensor_value(
-          subgraph, datatype, zero_point,
+          subgraph, datatype,
+          static_cast<const TfLiteAffineQuantization*>(
+              tensor.quantization.params)
+              ->zero_point->data[0],
           static_cast<const TfLiteAffineQuantization*>(
               tensor.quantization.params)
               ->scale->data[0],
           dims.size(), dims.data(), data, XNN_INVALID_VALUE_ID, flags,
           xnnpack_id);
-    } break;
+      break;
     case xnn_datatype_qcint4:
     case xnn_datatype_qcint8:
     case xnn_datatype_qcint32:
@@ -571,9 +568,10 @@ class Delegate {
   friend class Subgraph;
 
  public:
-  explicit Delegate(const TfLiteXNNPackDelegateOptions* options,
-                    xnn_workspace_t workspace,
-                    TfLiteContext* context = nullptr) {
+  explicit Delegate(const TfLiteXNNPackDelegateOptions* options_ptr,
+                    xnn_workspace_t workspace, TfLiteContext* context = nullptr)
+      : options_(options_ptr ? *options_ptr
+                             : TfLiteXNNPackDelegateOptionsDefault()) {
     int num_subgraphs = 1;
     if (context) {
       tflite::Subgraph* this_subgraph =
@@ -599,9 +597,9 @@ class Delegate {
       own_threadpool_ = false;
     } else {
       own_threadpool_ = true;
-      if (options != nullptr && options->num_threads > 1) {
+      if (options_.num_threads > 1) {
         threadpool_.reset(
-            pthreadpool_create(static_cast<size_t>(options->num_threads)));
+            pthreadpool_create(static_cast<size_t>(options_.num_threads)));
         threadpool = threadpool_.get();
       }
     }
@@ -610,8 +608,6 @@ class Delegate {
     TFLITE_LOG_PROD_ONCE(tflite::TFLITE_LOG_INFO,
                          "Created TensorFlow Lite XNNPACK delegate for CPU.");
 
-    options_ =
-        options != nullptr ? *options : TfLiteXNNPackDelegateOptionsDefault();
     delegate_.flags = GetXNNPackDelegateFlags();
     workspace_.reset(workspace);
 
@@ -704,12 +700,7 @@ class Delegate {
   }
 
   bool enable_subgraph_reshaping() const {
-#ifdef XNNPACK_DELEGATE_ENABLE_SUBGRAPH_RESHAPING
     return true;
-#else
-    return (options_.flags &
-            TFLITE_XNNPACK_DELEGATE_FLAG_ENABLE_SUBGRAPH_RESHAPING) != 0;
-#endif
   }
 
   bool enable_slinky() const {
@@ -2160,9 +2151,9 @@ class Subgraph {
             return kTfLiteError;
           }
           if (quantization_params->scale->size > 1) {
-            int zero_point = quantization_params->zero_point->data[0];
             if (xnn_validate_channelwise_quantized_tensor(
-                    xnn_datatype_qcint8, zero_point,
+                    xnn_datatype_qcint8,
+                    /*zero_point=*/quantization_params->zero_point->data[0],
                     quantization_params->scale->data, tensor_dims.size(),
                     /*channel_dim=*/quantization_params->quantized_dimension,
                     tensor_dims.data()) != xnn_status_success) {
@@ -3662,6 +3653,12 @@ class Subgraph {
           for (int i = 0; i < output_channels; ++i) {
             filter_params->scale->data[i] = filter_tensor.params.scale;
           }
+          TfLiteIntArrayFree(filter_params->zero_point);
+          filter_params->zero_point = TfLiteIntArrayCreate(output_channels);
+          for (int i = 0; i < output_channels; ++i) {
+            filter_params->zero_point->data[i] =
+                filter_tensor.params.zero_point;
+          }
         }
         uint32_t dq_quantized_id = XNN_INVALID_VALUE_ID;
         std::vector<size_t> input_dims(
@@ -4610,6 +4607,12 @@ class Subgraph {
           filter_params->scale = TfLiteFloatArrayCreate(output_channels);
           std::fill_n(filter_params->scale->data, output_channels,
                       filter_tensor.params.scale);
+          TfLiteIntArrayFree(filter_params->zero_point);
+          filter_params->zero_point = TfLiteIntArrayCreate(output_channels);
+          for (int i = 0; i < output_channels; ++i) {
+            filter_params->zero_point->data[i] =
+                filter_tensor.params.zero_point;
+          }
         }
         std::vector<size_t> input_dims(
             &input_tensor.dims->data[0],
@@ -5111,7 +5114,7 @@ class Subgraph {
 
     const int32_t* paddings_data =
         reinterpret_cast<const int32_t*>(paddings_tensor.data.data);
-    for (int i = 0; i < NumDimensions(&paddings_tensor); i++) {
+    for (int i = 0; i < SizeOfDimension(&paddings_tensor, 0); i++) {
       const int32_t pre_padding = paddings_data[i * 2 + 0];
       if (pre_padding < 0) {
         TF_LITE_MAYBE_KERNEL_LOG(
@@ -5132,8 +5135,8 @@ class Subgraph {
     }
 
     if (subgraph != nullptr) {
-      std::array<size_t, XNN_MAX_TENSOR_DIMS> pre_paddings{};
-      std::array<size_t, XNN_MAX_TENSOR_DIMS> post_paddings{};
+      std::array<size_t, XNN_MAX_TENSOR_DIMS> pre_paddings;
+      std::array<size_t, XNN_MAX_TENSOR_DIMS> post_paddings;
       for (int i = 0; i < SizeOfDimension(&paddings_tensor, 0); i++) {
         pre_paddings[i] = static_cast<size_t>(paddings_data[i * 2 + 0]);
         post_paddings[i] = static_cast<size_t>(paddings_data[i * 2 + 1]);
@@ -6443,6 +6446,12 @@ class Subgraph {
           for (int i = 0; i < output_channels; ++i) {
             filter_params->scale->data[i] = filter_tensor.params.scale;
           }
+          TfLiteIntArrayFree(filter_params->zero_point);
+          filter_params->zero_point = TfLiteIntArrayCreate(output_channels);
+          for (int i = 0; i < output_channels; ++i) {
+            filter_params->zero_point->data[i] =
+                filter_tensor.params.zero_point;
+          }
         }
         uint32_t dq_quantized_id = XNN_INVALID_VALUE_ID;
         std::vector<size_t> input_dims(
@@ -6962,17 +6971,10 @@ TfLiteIntArray* Delegate::PrepareOpsToDelegate(TfLiteContext* context) {
                              input_tensor.params.scale);
             } else {
               // Per-channel quantization
-              const int* zero_point_data = quant_params->zero_point->data;
-              std::vector<int> broadcast_zero_points;
-              if (quant_params->zero_point->size != quant_params->scale->size) {
-                broadcast_zero_points.resize(quant_params->scale->size,
-                                             quant_params->zero_point->data[0]);
-                zero_point_data = broadcast_zero_points.data();
-              }
               PerChannelDequantizeInt8(
                   reinterpret_cast<const int8_t*>(packed_data),
                   reinterpret_cast<float*>(unpacked_data),
-                  GetTensorShape(&input_tensor), zero_point_data,
+                  GetTensorShape(&input_tensor), quant_params->zero_point->data,
                   quant_params->scale->data, quant_params->quantized_dimension);
             }
             break;
