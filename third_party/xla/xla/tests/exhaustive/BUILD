@@ -141,7 +141,6 @@ exhaustive_xla_test(
     shard_count = 50,
     tags = [
         "optonly",
-        "test_xla_cpu_no_thunks",
         # This is a big test that we skip for capacity reasons in OSS testing.
         "no_oss",
     ],
@@ -183,7 +182,6 @@ xla_test(
     shard_count = 50,
     tags = [
         "optonly",
-        "test_xla_cpu_no_thunks",
         # This is a big test that we skip for capacity reasons in OSS testing.
         "no_oss",
     ],
@@ -193,7 +191,6 @@ xla_test(
         "//xla:literal",
         "//xla:types",
         "//xla/hlo/builder:xla_builder",
-        "//xla/tests:test_macros_header",
         "@com_google_absl//absl/log",
         "@com_google_absl//absl/types:span",
         "@local_tsl//tsl/platform:test",

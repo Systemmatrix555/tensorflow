@@ -36,6 +36,8 @@ limitations under the License.
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "absl/types/span.h"
+#include "xla/hlo/analysis/alias_info.h"
+#include "xla/hlo/analysis/hlo_operand_index.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_module.h"
 #include "xla/hlo/ir/hlo_opcode.h"
@@ -46,35 +48,6 @@ limitations under the License.
 #include "xla/xla_data.pb.h"
 
 namespace xla {
-
-// Identifies one array input of an HloInstruction.
-struct HloOperandIndex {
-  using MyTuple = std::tuple<int64_t, const ShapeIndex&>;
-
-  template <typename H>
-  friend H AbslHashValue(H h, const HloOperandIndex& hlo_operand_index) {
-    return H::combine(std::move(h), hlo_operand_index.ToTuple());
-  }
-
-  friend bool operator==(const HloOperandIndex& lhs,
-                         const HloOperandIndex& rhs) {
-    return lhs.ToTuple() == rhs.ToTuple();
-  }
-
-  bool operator!=(const HloOperandIndex& other) const {
-    return !(*this == other);
-  }
-
-  MyTuple ToTuple() const {
-    return std::make_tuple(operand_number, std::cref(operand_index));
-  }
-
-  // The operand number in which the array value appears.
-  int64_t operand_number;
-
-  // The shape index within the operand in which the array value appears.
-  ShapeIndex operand_index;
-};
 
 // Analysis which identifies all HLO values and their uses in an HLO module.
 class HloDataflowAnalysis {
@@ -110,6 +83,7 @@ class HloDataflowAnalysis {
   //   bitcast_defines_value : If true then the Bitcast HLO instruction defines
   //     a new HLO value in the analysis. If false then Bitcast forwards the
   //     value of its operand.
+  // TODO(b/424109294): Remove `can_share_buffer` parameter.
   static absl::StatusOr<std::unique_ptr<HloDataflowAnalysis>> Run(
       const HloModule& module, bool ssa_form = false,
       bool bitcast_defines_value = false,
@@ -191,14 +165,10 @@ class HloDataflowAnalysis {
   bool CanShareOperandBufferWithUser(HloInstruction* operand,
                                      const ShapeIndex& operand_index,
                                      HloInstruction* user,
-                                     const ShapeIndex& user_index) const;
+                                     const ShapeIndex& user_index,
+                                     const AliasInfo* alias_info) const;
 
   const HloModule& module() const { return module_; }
-
-  // Returns true if `hlo` is potentially an in-place operation (i.e. operands
-  // must alias with the outputs). GetInPlaceInputOutputPairs() will only return
-  // aliasing pairs if this method returns true.
-  static bool IsPotentialInPlaceOperation(const HloInstruction* hlo);
 
   // Returns true if the operation is the start/done of an asynchronous
   // operation, where the buffer used/produced by the op needs to stay alive
@@ -222,6 +192,7 @@ class HloDataflowAnalysis {
   //
   // ... the results can include any of the 3 * 3 = 9 possible pairs of
   // input and output arrays.
+  // TODO(b/424109294): Move this to AliasInfo class.
   static std::vector<std::pair<HloOperandIndex, ShapeIndex>>
   GetInPlaceInputOutputPairs(const HloInstruction* instruction);
 
@@ -235,6 +206,9 @@ class HloDataflowAnalysis {
                       bool bitcast_defines_value,
                       const CanShareBuffer& can_share_buffer,
                       absl::flat_hash_set<absl::string_view> execution_threads);
+
+  // Runs dataflow analysis on the module attached to this HloDataflowAnalysis.
+  absl::Status RunImpl();
 
   // 1. During value propagation (Propagate function), always create phi
   // values once it see multiple inputs merging at the same point. It then
@@ -362,6 +336,7 @@ class HloDataflowAnalysis {
 
   // Backend specific function that decides whether an instruction can share
   // a buffer with its operand.
+  // TODO(b/424109294): Remove this.
   CanShareBuffer can_share_buffer_ = nullptr;
 };
 

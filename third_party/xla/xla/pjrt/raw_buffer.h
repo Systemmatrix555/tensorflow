@@ -19,6 +19,7 @@ limitations under the License.
 #include <optional>
 
 #include "absl/status/statusor.h"
+#include "xla/literal.h"
 #include "xla/pjrt/device_event.h"
 #include "xla/pjrt/pjrt_future.h"
 #include "xla/shape.h"
@@ -112,6 +113,27 @@ class CommonPjRtRawBuffer : public PjRtRawBuffer {
   // Slices out any dynamic shape information (if present).
   virtual absl::StatusOr<tsl::RCReference<CommonPjRtRawBuffer>>
   RemoveDynamicShapeMetadataIfPresent(const xla::Shape& logical_shape);
+
+  // Reads the dynamic shape for a raw buffer. output_shape must be a
+  // constructed AsyncValueRef which will have its dimensions updated.
+  virtual void ReadDynamicShape(tsl::AsyncValueRef<xla::Shape> output_shape,
+                                xla::Shape shape) = 0;
+
+  // Interprets buffer contents as having shape and linearizes these contents
+  // async into the provided literal.
+  virtual void CopyToLiteralAsync(
+      PjRtFuture<>::Promise promise,
+      tsl::RCReference<PjRtDeviceEventPromise> device_promise,
+      MutableLiteralBase* literal, xla::Shape shape) = 0;
+
+  // Copies directly into dst_raw_buffer. Must set definition_event_promise,
+  // when dst_raw_buffer is ready, allocation_event before using dst_raw_buffer
+  // and src_usage_event_promise when done using this buffer.
+  virtual void CopyTo(
+      tsl::RCReference<CommonPjRtRawBuffer> dst_raw_buffer,
+      tsl::RCReference<PjRtDeviceEventPromise> definition_event_promise,
+      tsl::RCReference<PjRtDeviceEventPromise> src_usage_event_promise,
+      ::tsl::AsyncValueRef<bool> allocation_event) = 0;
 };
 
 class RegisterRawBufferFactory {

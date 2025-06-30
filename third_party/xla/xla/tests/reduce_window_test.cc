@@ -49,7 +49,6 @@ limitations under the License.
 #include "xla/shape_util.h"
 #include "xla/tests/client_library_test_base.h"
 #include "xla/tests/hlo_test_base.h"
-#include "xla/tests/test_macros.h"
 #include "xla/tsl/lib/core/status_test_util.h"
 #include "xla/xla_data.pb.h"
 #include "tsl/platform/errors.h"
@@ -1842,7 +1841,7 @@ ENTRY R4OnlyDilation {
 }
 
 TEST_F(HloTestBase, ReduceWindowVariadicSupport) {
-  if (test::DeviceIs(test::kGpu)) {
+  if (test::DeviceTypeIs(test::kGpu)) {
     GTEST_SKIP();
   }
   const char* const hlo_string = R"(
@@ -1872,7 +1871,7 @@ ENTRY entry {
 }
 
 TEST_F(HloTestBase, ReduceWindowVariadicSupport2) {
-  if (test::DeviceIs(test::kGpu)) {
+  if (test::DeviceTypeIs(test::kGpu)) {
     GTEST_SKIP();
   }
   const char* const hlo_string = R"(
@@ -1901,7 +1900,7 @@ ENTRY entry {
 }
 
 TEST_F(HloTestBase, ReduceWindowVariadicSupport3) {
-  if (test::DeviceIs(test::kGpu)) {
+  if (test::DeviceTypeIs(test::kGpu)) {
     GTEST_SKIP();
   }
   const char* const hlo_string = R"(
@@ -1930,7 +1929,7 @@ ENTRY entry {
 }
 
 TEST_F(HloTestBase, ReduceWindowVariadicSupport4) {
-  if (test::DeviceIs(test::kGpu)) {
+  if (test::DeviceTypeIs(test::kGpu)) {
     GTEST_SKIP();
   }
   const char* const hlo_string = R"(
@@ -1959,7 +1958,7 @@ ENTRY entry {
 }
 
 TEST_F(HloTestBase, ReduceWindowS64Support) {
-  if (test::DeviceIs(test::kGpu)) {
+  if (test::DeviceTypeIs(test::kGpu)) {
     GTEST_SKIP();
   }
   const char* const hlo_string = R"(
@@ -1982,7 +1981,7 @@ ENTRY %jit_dilated_window_sum.10 (parameter.1: s64[8,10,12]) -> (s64[8,10,12]) {
 }
 
 TEST_F(HloTestBase, ReduceWindowS64Support2) {
-  if (test::DeviceIs(test::kGpu)) {
+  if (test::DeviceTypeIs(test::kGpu)) {
     GTEST_SKIP();
   }
   const char* const hlo_string = R"(
@@ -2042,7 +2041,7 @@ ENTRY %SyncTensorsGraph.43 (p0.1: f32[], p1.7: pred[3,3]) -> (pred[]) {
 }
 
 TEST_F(HloTestBase, VariadicWithNonTrivialWindows) {
-  if (test::DeviceIs(test::kGpu)) {
+  if (test::DeviceTypeIs(test::kGpu)) {
     GTEST_SKIP();
   }
   const char* const hlo_string = R"(
