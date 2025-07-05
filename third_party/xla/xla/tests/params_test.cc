@@ -33,7 +33,6 @@ limitations under the License.
 #include "xla/shape_util.h"
 #include "xla/tests/client_library_test_runner_mixin.h"
 #include "xla/tests/hlo_test_base.h"
-#include "xla/tests/test_macros.h"
 #include "xla/tsl/platform/test.h"
 #include "xla/xla_data.pb.h"
 
@@ -442,7 +441,7 @@ TEST_F(ParamsTest, R2_2x2_Layout_10) {
 // reflect the layout of the original literal, so it does not pass. This seems
 // to be a niche behavior that is not worth fixing.
 TEST_F(ParamsTest, R2_2x2_TryToPassReverseLayoutToParameter) {
-  if (test::DeviceIsOneOf({test::kCpu, test::kGpu, test::kInterpreter})) {
+  if (test::DeviceTypeIsOneOf({test::kCpu, test::kGpu, test::kInterpreter})) {
     GTEST_SKIP();
   }
   Literal literal = LiteralUtil::CreateR2<float>({

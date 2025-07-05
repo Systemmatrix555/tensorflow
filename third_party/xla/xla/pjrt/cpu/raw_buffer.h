@@ -117,6 +117,14 @@ class CpuRawBuffer : public CommonPjRtRawBuffer {
 
   void* GetHostPointer() const override;
 
+  void* OpaqueDeviceMemoryDataPointer() const override {
+    // We need to wait for the memory to be allocated before sharing it with
+    // external frameworks like NumPy.
+    tsl::BlockUntilReady(buffer_);
+    CHECK(buffer_.IsConcrete());
+    return buffer_->untyped_data();
+  }
+
   const tsl::AsyncValueRef<CpuDeviceMemory>& buffer() const { return buffer_; }
 
   PjRtMemorySpace* memory_space() const override { return memory_space_; }
@@ -143,6 +151,19 @@ class CpuRawBuffer : public CommonPjRtRawBuffer {
       absl::AnyInvocable<void() &&> on_done_with_host_buffer,
       const Shape& shape, AsyncWorkRunner* async_work_runner,
       absl::Mutex* transpose_mu, TransposePlanCache* transpose_cache);
+
+  void ReadDynamicShape(tsl::AsyncValueRef<xla::Shape> output_shape,
+                        xla::Shape shape) override;
+
+  void CopyToLiteralAsync(
+      PjRtFuture<>::Promise promise,
+      tsl::RCReference<PjRtDeviceEventPromise> device_promise,
+      MutableLiteralBase* literal, xla::Shape shape) override;
+
+  void CopyTo(tsl::RCReference<CommonPjRtRawBuffer> dst_raw_buffer,
+              tsl::RCReference<PjRtDeviceEventPromise> definition_event_promise,
+              tsl::RCReference<PjRtDeviceEventPromise> src_usage_event_promise,
+              ::tsl::AsyncValueRef<bool> allocation_event) override;
 
  private:
   PjRtMemorySpace* const memory_space_;

@@ -30,6 +30,7 @@ limitations under the License.
 #include <vector>
 
 #include "absl/algorithm/container.h"
+#include "absl/base/no_destructor.h"
 #include "absl/base/optimization.h"
 #include "absl/container/inlined_vector.h"
 #include "absl/functional/function_ref.h"
@@ -340,8 +341,9 @@ static std::vector<bool> MakeDynamicDimensions(
   }
 
   if (any_overflows) {
-    return InvalidArgument("overflow in static extent product: dimes=[%s]",
-                           absl::StrJoin(dimensions, ","));
+    return InvalidArgument(
+        "overflow in static extent product: dimensions=[%s].",
+        absl::StrJoin(dimensions, ", "));
   }
   return shape;
 }
@@ -516,7 +518,7 @@ ShapeUtil::MakeValidatedShapeWithDescendingLayoutAndSamePhysicalLayout(
 }
 
 /* static */ void ShapeUtil::AppendMajorDimension(int bound, Shape* shape) {
-  CHECK(LayoutUtil::IsDenseArray(*shape));
+  CHECK(shape->IsArray());
   if (shape->has_layout()) {
     shape->mutable_layout()->add_minor_to_major(shape->dimensions().size());
   }
@@ -541,7 +543,7 @@ Shape ShapeUtil::PrependMajorDimension(int64_t bound, Shape shape) {
 }
 
 /* static */ void ShapeUtil::AppendMinorDimension(int bound, Shape* shape) {
-  CHECK(LayoutUtil::IsDenseArray(*shape));
+  CHECK(shape->IsArray());
   shape->add_dimensions(bound);
   if (shape->has_layout()) {
     // Append an empty field to the layout.
@@ -557,6 +559,42 @@ Shape ShapeUtil::PrependMajorDimension(int64_t bound, Shape shape) {
                                                 shape->dimensions().size() - 1);
   }
   TF_DCHECK_OK(ValidateShape(*shape));
+}
+
+Shape ShapeUtil::InsertDimensionAtIndex(Shape shape, int64_t dim_idx,
+                                        int64_t bound) {
+  CHECK(shape.IsArray());
+  CHECK_GE(dim_idx, 0);
+  CHECK_LE(dim_idx, shape.dimensions().size());
+
+  const auto& dims = shape.dimensions();
+  std::vector<int64_t> new_dims(dims.begin(), dims.begin() + dim_idx);
+  new_dims.push_back(bound);
+  new_dims.insert(new_dims.end(), dims.begin() + dim_idx, dims.end());
+  Shape new_shape(shape.element_type(), new_dims);
+
+  if (shape.has_layout()) {
+    auto* layout = new_shape.mutable_layout();
+
+    // When dim_idx is at the end, the new dimension is made the most minor, and
+    // the rest of the layout is preserved.
+    if (dim_idx == shape.dimensions().size()) {
+      layout->add_minor_to_major(dim_idx);
+    }
+
+    for (int64_t dim : shape.layout().minor_to_major()) {
+      layout->add_minor_to_major(dim >= dim_idx ? dim + 1 : dim);
+      // When inserting in the middle, the loop finds the original dimension at
+      // dim_idx, shifts it and all more major dimensions up, and inserts the
+      // new dimension to be "next major" to the original one.
+      if (dim == dim_idx) {
+        layout->add_minor_to_major(dim_idx);
+      }
+    }
+  }
+
+  TF_DCHECK_OK(ValidateShape(new_shape));
+  return new_shape;
 }
 
 /* static */ void ShapeUtil::CopyDynamicDimensions(Shape* to,
@@ -909,7 +947,7 @@ Shape ShapeUtil::PrependMajorDimension(int64_t bound, Shape shape) {
   TF_DCHECK_OK(ValidateShapeWithOptionalLayout(shape));
   int64_t allocated_element_count;
 
-  CHECK(LayoutUtil::IsDenseArray(shape)) << shape.ToString();
+  CHECK(shape.IsArray()) << shape.ToString();
   allocated_element_count = ElementsIn(shape);
 
   if (shape.has_layout() && shape.layout().element_size_in_bits() != 0) {
@@ -1241,7 +1279,7 @@ ShapeUtil::PackedFactorFor1DInterleavedArray(const Shape& shape) {
   //   L*    = P.L
   //
   if (shape.has_layout()) {
-    CHECK(LayoutUtil::IsDenseArray(shape));
+    CHECK(shape.IsArray());
     Layout* new_layout = new_shape.mutable_layout();
     new_layout->clear_minor_to_major();
     for (auto index : ComposePermutations(InversePermutation(permutation),
@@ -1372,8 +1410,8 @@ ShapeUtil::ReshapeLeavesDimensionsUnmodified(
 /* static */ bool ShapeUtil::TransposeIsBitcast(
     const Shape& input_shape, const Shape& output_shape,
     absl::Span<const int64_t> dimension_mapping, bool ignore_element_type) {
-  CHECK(LayoutUtil::IsDenseArray(input_shape)) << input_shape.ToString(true);
-  CHECK(LayoutUtil::IsDenseArray(output_shape)) << output_shape.ToString(true);
+  CHECK(input_shape.IsArray()) << input_shape.ToString(true);
+  CHECK(output_shape.IsArray()) << output_shape.ToString(true);
   CHECK(input_shape.has_layout()) << input_shape.ToString(true);
   CHECK(output_shape.has_layout()) << output_shape.ToString(true);
 
@@ -1423,8 +1461,8 @@ ShapeUtil::ReshapeLeavesDimensionsUnmodified(
 /* static */ bool ShapeUtil::ReshapeIsBitcast(const Shape& input_shape,
                                               const Shape& output_shape,
                                               bool ignore_element_type) {
-  CHECK(LayoutUtil::IsDenseArray(input_shape)) << input_shape.ToString(true);
-  CHECK(LayoutUtil::IsDenseArray(output_shape)) << output_shape.ToString(true);
+  CHECK(input_shape.IsArray()) << input_shape.ToString(true);
+  CHECK(output_shape.IsArray()) << output_shape.ToString(true);
   CHECK(input_shape.has_layout()) << input_shape.ToString(true);
   CHECK(output_shape.has_layout()) << output_shape.ToString(true);
 
@@ -1949,9 +1987,9 @@ struct ParallelState {
   explicit ParallelState(int64_t task_count) {
     // If this method is changed, please remember to change
     // GetForEachIndexParallelThreadCount() as well.
-    static auto* const global_pool = new tsl::thread::ThreadPool(
+    static absl::NoDestructor<tsl::thread::ThreadPool> global_pool(
         tsl::Env::Default(), "foreach", tsl::port::MaxParallelism());
-    pool = global_pool;
+    pool = global_pool.get();
   }
   ~ParallelState() = default;
 
@@ -2140,7 +2178,7 @@ std::optional<absl::InlinedVector<int64_t, 4>> ShapeUtil::ByteStrides(
 }
 
 /*static*/ int64_t ShapeUtil::ArraySize(const Shape& shape) {
-  CHECK(LayoutUtil::IsDenseArray(shape));
+  CHECK(shape.IsArray());
   if (shape.layout().tiles().empty()) {
     return ByteSizeOfElements(shape);
   }
@@ -2181,7 +2219,7 @@ std::optional<absl::InlinedVector<int64_t, 4>> ShapeUtil::ByteStrides(
 }
 
 /*static*/ int64_t ShapeUtil::ArrayDataSize(const Shape& shape) {
-  CHECK(LayoutUtil::IsDenseArray(shape));
+  CHECK(shape.IsArray());
   absl::InlinedVector<int64_t, 4> indices;
   for (int64_t dim : shape.dimensions()) {
     indices.push_back(dim - 1);

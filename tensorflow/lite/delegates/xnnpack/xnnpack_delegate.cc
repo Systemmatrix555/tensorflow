@@ -571,9 +571,10 @@ class Delegate {
   friend class Subgraph;
 
  public:
-  explicit Delegate(const TfLiteXNNPackDelegateOptions* options,
-                    xnn_workspace_t workspace,
-                    TfLiteContext* context = nullptr) {
+  explicit Delegate(const TfLiteXNNPackDelegateOptions* options_ptr,
+                    xnn_workspace_t workspace, TfLiteContext* context = nullptr)
+      : options_(options_ptr ? *options_ptr
+                             : TfLiteXNNPackDelegateOptionsDefault()) {
     int num_subgraphs = 1;
     if (context) {
       tflite::Subgraph* this_subgraph =
@@ -599,9 +600,9 @@ class Delegate {
       own_threadpool_ = false;
     } else {
       own_threadpool_ = true;
-      if (options != nullptr && options->num_threads > 1) {
+      if (options_.num_threads > 1) {
         threadpool_.reset(
-            pthreadpool_create(static_cast<size_t>(options->num_threads)));
+            pthreadpool_create(static_cast<size_t>(options_.num_threads)));
         threadpool = threadpool_.get();
       }
     }
@@ -610,8 +611,6 @@ class Delegate {
     TFLITE_LOG_PROD_ONCE(tflite::TFLITE_LOG_INFO,
                          "Created TensorFlow Lite XNNPACK delegate for CPU.");
 
-    options_ =
-        options != nullptr ? *options : TfLiteXNNPackDelegateOptionsDefault();
     delegate_.flags = GetXNNPackDelegateFlags();
     workspace_.reset(workspace);
 
@@ -704,16 +703,8 @@ class Delegate {
   }
 
   bool enable_subgraph_reshaping() const {
-#ifdef XNNPACK_DELEGATE_ENABLE_SUBGRAPH_RESHAPING
-    return true;
-#else
     return (options_.flags &
-            TFLITE_XNNPACK_DELEGATE_FLAG_ENABLE_SUBGRAPH_RESHAPING) != 0;
-#endif
-  }
-
-  bool enable_slinky() const {
-    return (options_.flags & TFLITE_XNNPACK_DELEGATE_FLAG_ENABLE_SLINKY) != 0;
+            TFLITE_XNNPACK_DELEGATE_FLAG_DISABLE_SUBGRAPH_RESHAPING) == 0;
   }
 
   uint32_t runtime_flags() const { return options_.runtime_flags; }
@@ -1178,11 +1169,6 @@ class Subgraph {
     }
     if (context->profiler) {
       flags |= XNN_FLAG_BASIC_PROFILING;
-    }
-    if (delegate.enable_slinky()) {
-      // TODO: this flag isn't yet part of the public XNNPACK API
-      constexpr uint32_t XNN_FLAG_SLINKY_ENABLED = 0x40000000;
-      flags |= XNN_FLAG_SLINKY_ENABLED;
     }
     flags |= delegate.runtime_flags();
 
@@ -4807,6 +4793,12 @@ class Subgraph {
     const int32_t* axes_data =
         reinterpret_cast<const int32_t*>(axes_tensor.data.data);
     const int num_reduction_axes = NumElements(&axes_tensor);
+    if (num_reduction_axes <= 0) {
+      TF_LITE_MAYBE_KERNEL_LOG(
+          logging_context,
+          "Not handling ill defined empty reduction in node #%d", node_index);
+      return kTfLiteError;
+    }
     const TfLiteTensor& output_tensor = tensors[node->outputs->data[0]];
     TF_LITE_ENSURE_STATUS(
         CheckTensorFloat32OrQUInt8Type(delegate, logging_context, output_tensor,
@@ -5111,7 +5103,7 @@ class Subgraph {
 
     const int32_t* paddings_data =
         reinterpret_cast<const int32_t*>(paddings_tensor.data.data);
-    for (int i = 0; i < NumDimensions(&paddings_tensor); i++) {
+    for (int i = 0; i < SizeOfDimension(&paddings_tensor, 0); i++) {
       const int32_t pre_padding = paddings_data[i * 2 + 0];
       if (pre_padding < 0) {
         TF_LITE_MAYBE_KERNEL_LOG(
@@ -5132,8 +5124,8 @@ class Subgraph {
     }
 
     if (subgraph != nullptr) {
-      std::array<size_t, XNN_MAX_TENSOR_DIMS> pre_paddings{};
-      std::array<size_t, XNN_MAX_TENSOR_DIMS> post_paddings{};
+      std::array<size_t, XNN_MAX_TENSOR_DIMS> pre_paddings;
+      std::array<size_t, XNN_MAX_TENSOR_DIMS> post_paddings;
       for (int i = 0; i < SizeOfDimension(&paddings_tensor, 0); i++) {
         pre_paddings[i] = static_cast<size_t>(paddings_data[i * 2 + 0]);
         post_paddings[i] = static_cast<size_t>(paddings_data[i * 2 + 1]);

@@ -20,7 +20,6 @@ limitations under the License.
 #include "xla/hlo/testlib/test.h"
 #include "xla/literal_util.h"
 #include "xla/tests/hlo_pjrt_test_base.h"
-#include "xla/tests/test_macros.h"
 #include "xla/tsl/platform/statusor.h"
 
 namespace xla {
@@ -67,10 +66,7 @@ TEST_F(BatchNormGradTest, CorrectComputation) {
 }
 
 TEST_F(BatchNormGradTest, ReturnsErrorWhenHloPassesDisabled) {
-  if (test::DeviceTypeIs(test::kTpu)) {
-    GTEST_SKIP();
-  }
-  if (test::DeviceIsOneOf({test::kGpu, test::kInterpreter})) {
+  if (test::DeviceTypeIsOneOf({test::kGpu, test::kInterpreter, test::kTpu})) {
     GTEST_SKIP();
   }
   TF_ASSERT_OK_AND_ASSIGN(auto module,

@@ -24,7 +24,6 @@ limitations under the License.
 #include "xla/literal_util.h"
 #include "xla/tests/hlo_pjrt_interpreter_reference_mixin.h"
 #include "xla/tests/hlo_pjrt_test_base.h"
-#include "xla/tests/test_macros.h"
 #include "xla/tsl/platform/statusor.h"
 
 namespace xla {
@@ -60,8 +59,7 @@ ENTRY %a_inference_call_110__.55 (arg0.1: f32[1,8], arg1.2: f32[8], arg2.3: f32[
 }
 
 TEST_F(GetDimensionSizeTest, ReturnsErrorWhenHloPassesDisabled) {
-  if (test::DeviceIsOneOf({test::kGpu, test::kInterpreter}) ||
-      test::DeviceTypeIs(test::kTpu)) {
+  if (test::DeviceTypeIsOneOf({test::kGpu, test::kInterpreter, test::kTpu})) {
     GTEST_SKIP();
   }
   const char* const kModuleStr = R"(

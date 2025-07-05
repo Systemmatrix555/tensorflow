@@ -254,6 +254,7 @@ void PjRtCApiClient::InitAttributes() {
   pjrt::LogFatalIfPjrtError(c_api_->PJRT_Plugin_Attributes(&args), c_api_);
   attributes_ =
       pjrt::ConvertFromPjRtNamedValueList(args.attributes, args.num_attributes);
+  attributes_["serialize_with_sdy"] = true;
 }
 
 int PjRtCApiClient::device_count() const { return devices_.size(); }
@@ -406,9 +407,13 @@ PjRtCApiClient::CompileAndLoad(mlir::ModuleOp module, CompileOptions options) {
     version_string = xla::GetDefaultStablehloVersion(
         plugin_attributes()->pjrt_c_api_minor_version);
   }
-
-  TF_ASSIGN_OR_RETURN(std::string serialized,
-                      xla::Serialize(module, version_string));
+  TF_ASSIGN_OR_RETURN(
+      std::string serialized,
+      xla::Serialize(module, version_string,
+                     /*plugin_version=*/plugin_attributes().has_value()
+                         ? std::make_optional(
+                               plugin_attributes()->pjrt_c_api_minor_version)
+                         : std::nullopt));
   std::string format(pjrt::kMlirFormat);
   return InitializeArgsAndCompile(this, c_api_, c_client_.get(), options,
                                   serialized, format);
@@ -2040,7 +2045,7 @@ void PjRtCApiLoadedExecutable::Delete() {
   pjrt::LogFatalIfPjrtError(c_api->PJRT_LoadedExecutable_Delete(&args), c_api);
 }
 
-bool PjRtCApiLoadedExecutable::IsDeleted() {
+bool PjRtCApiLoadedExecutable::IsDeleted() const {
   PJRT_LoadedExecutable_IsDeleted_Args args;
   args.struct_size = PJRT_LoadedExecutable_IsDeleted_Args_STRUCT_SIZE;
   args.extension_start = nullptr;
@@ -2330,7 +2335,7 @@ void PjRtCApiBuffer::Delete() {
   pjrt::LogFatalIfPjrtError(api->PJRT_Buffer_Delete(&args), api);
 }
 
-bool PjRtCApiBuffer::IsDeleted() {
+bool PjRtCApiBuffer::IsDeleted() const {
   PJRT_Buffer_IsDeleted_Args args;
   args.struct_size = PJRT_Buffer_IsDeleted_Args_STRUCT_SIZE;
   args.extension_start = nullptr;
@@ -2641,7 +2646,8 @@ absl::StatusOr<std::unique_ptr<PjRtExecutable>> PjRtCApiCompiler::Compile(
   }
   TF_ASSIGN_OR_RETURN(
       std::string serialized,
-      xla::Serialize(module, xla::GetDefaultStablehloVersion(plugin_version)));
+      xla::Serialize(module, xla::GetDefaultStablehloVersion(plugin_version),
+                     /*plugin_version=*/plugin_version));
   std::string format(pjrt::kMlirFormat);
   return InitializeArgsAndCompileAot(c_api_, client, options, topology,
                                      serialized, format);

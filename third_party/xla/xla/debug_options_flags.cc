@@ -164,7 +164,6 @@ DebugOptions DefaultDebugOptionsIgnoringFlags() {
   opts.set_xla_enable_dumping(true);
 
   opts.set_xla_gpu_enable_custom_fusions(false);
-  opts.set_xla_gpu_enable_dynamic_slice_fusion(false);
   opts.set_xla_gpu_nccl_termination_timeout_seconds(-1);
   opts.set_xla_gpu_enable_shared_constants(true);
   opts.set_xla_gpu_enable_nccl_user_buffers(false);
@@ -252,7 +251,6 @@ DebugOptions DefaultDebugOptionsIgnoringFlags() {
   opts.set_xla_gpu_operand_bytes_threshold_for_windowed_einsum(-1);
 
   opts.set_xla_gpu_enable_triton_hopper(false);
-  opts.set_xla_gpu_experimental_enable_dynamic_dot_search_space(true);
   opts.set_xla_gpu_experimental_enable_fusion_block_level_rewriter(false);
 
   opts.set_xla_gpu_enable_llvm_module_compilation_parallelism(false);
@@ -260,6 +258,8 @@ DebugOptions DefaultDebugOptionsIgnoringFlags() {
       stream_executor::IsLibNvPtxCompilerSupported());
   opts.set_xla_gpu_libnvjitlink_mode(DebugOptions::LIB_NV_JIT_LINK_MODE_AUTO);
 
+  opts.set_xla_gpu_nccl_async_execution(false);
+  opts.set_xla_gpu_nccl_blocking_communicators(true);
   opts.set_xla_gpu_nccl_collective_max_nchannels(0);
   opts.set_xla_gpu_nccl_p2p_max_nchannels(0);
   opts.set_xla_gpu_multi_streamed_windowed_einsum(true);
@@ -325,11 +325,12 @@ DebugOptions DefaultDebugOptionsIgnoringFlags() {
   opts.set_xla_gpu_experimental_pack_dot_operands_along_k_dimension(true);
   opts.set_xla_unsupported_crash_on_hlo_pass_fix_max_iterations(false);
   opts.set_xla_hlo_pass_fix_detect_cycles(false);
-  opts.set_xla_gpu_experimental_enable_sync_collective_combining(false);
+  opts.set_xla_gpu_experimental_enable_heuristic_collective_combining(false);
   opts.set_xla_unsupported_crash_on_hlo_pass_silent_hlo_change(false);
   opts.set_xla_unsupported_crash_on_hlo_pass_noop_change(false);
   opts.set_xla_gpu_experimental_enable_split_k_rewrite(false);
   opts.set_xla_gpu_experimental_enable_triton_tma(false);
+  opts.set_xla_gpu_experimental_enable_command_buffer_on_thunks(false);
   return opts;
 }
 
@@ -1975,15 +1976,6 @@ void MakeDebugOptionsFlags(std::vector<tsl::Flag>* flag_list,
       debug_options->xla_gpu_enable_triton_hopper(),
       "Currently used to enable MMA_V3 for Hopper in Triton"));
   flag_list->push_back(tsl::Flag(
-      "xla_gpu_experimental_enable_dynamic_dot_search_space",
-      bool_setter_for(
-          &DebugOptions::
-              set_xla_gpu_experimental_enable_dynamic_dot_search_space),
-      debug_options->xla_gpu_experimental_enable_dynamic_dot_search_space(),
-      "Enable dynamically generating and pruning the autotuning search space "
-      "for Triton dot fusions, based on the properties of the problem and "
-      "hardware (shapes, instructions, GPU limits, etc.)."));
-  flag_list->push_back(tsl::Flag(
       "xla_gpu_experimental_enable_fusion_block_level_rewriter",
       bool_setter_for(
           &DebugOptions::
@@ -2016,6 +2008,16 @@ void MakeDebugOptionsFlags(std::vector<tsl::Flag>* flag_list,
       stream_executor::IsLibNvJitLinkSupported(),
       "Use libnvjitlink for PTX-to-GPU-assembly compilation instead of "
       "calling ptxas."));
+  flag_list->push_back(tsl::Flag(
+      "xla_gpu_nccl_async_execution",
+      bool_setter_for(&DebugOptions::set_xla_gpu_nccl_async_execution),
+      debug_options->xla_gpu_nccl_async_execution(),
+      "Whether to use asynchronous execution for NCCL communicators"));
+  flag_list->push_back(tsl::Flag(
+      "xla_gpu_nccl_blocking_communicators",
+      bool_setter_for(&DebugOptions::set_xla_gpu_nccl_blocking_communicators),
+      debug_options->xla_gpu_nccl_blocking_communicators(),
+      "Whether to use non-blocking NCCL communicators"));
   flag_list->push_back(
       tsl::Flag("xla_gpu_nccl_collective_max_nchannels",
                 int64_setter_for(
@@ -2303,12 +2305,13 @@ void MakeDebugOptionsFlags(std::vector<tsl::Flag>* flag_list,
       debug_options->xla_hlo_pass_fix_detect_cycles(),
       "Perform hash-based cycle detection in fixed-point loops."));
   flag_list->push_back(tsl::Flag(
-      "xla_gpu_experimental_enable_sync_collective_combining",
+      "xla_gpu_experimental_enable_heuristic_collective_combining",
       bool_setter_for(
           &DebugOptions::
-              set_xla_gpu_experimental_enable_sync_collective_combining),
-      debug_options->xla_gpu_experimental_enable_sync_collective_combining(),
-      "Enable sync collective combining."));
+              set_xla_gpu_experimental_enable_heuristic_collective_combining),
+      debug_options
+          ->xla_gpu_experimental_enable_heuristic_collective_combining(),
+      "Enable heuristic based collective combining."));
   flag_list->push_back(tsl::Flag(
       "xla_gpu_experimental_collective_cse_distance_threshold",
       int64_setter_for(
@@ -2360,6 +2363,14 @@ void MakeDebugOptionsFlags(std::vector<tsl::Flag>* flag_list,
           &DebugOptions::set_xla_gpu_experimental_enable_triton_tma),
       debug_options->xla_gpu_experimental_enable_triton_tma(),
       "Enable Triton's TMA loads/stores for arguments where applicable."));
+  flag_list->push_back(tsl::Flag(
+      "xla_gpu_experimental_enable_command_buffer_on_thunks",
+      bool_setter_for(
+          &DebugOptions::
+              set_xla_gpu_experimental_enable_command_buffer_on_thunks),
+      debug_options->xla_gpu_experimental_enable_command_buffer_on_thunks(),
+      "Enables an experimental feature for command buffer conversion on "
+      "thunks."));
 }  // NOLINT(readability/fn_size)
 
 // Allocates flag_values and flag_objects; this function must not be called more

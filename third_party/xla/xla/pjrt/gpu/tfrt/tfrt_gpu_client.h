@@ -120,6 +120,8 @@ class TfrtGpuDeviceMemorySpace : public TfrtGpuMemorySpace {
   TfrtGpuDeviceMemorySpace(int id, PjRtDevice* device);
 };
 
+class TfrtGpuClient;
+
 class TfrtGpuDevice final : public PjRtDevice {
  public:
   struct Options {
@@ -140,13 +142,13 @@ class TfrtGpuDevice final : public PjRtDevice {
 
   ~TfrtGpuDevice() override;
 
-  void SetClient(PjRtClient* client);
+  void SetClient(TfrtGpuClient* client);
 
   const PjRtStreamExecutorDeviceDescription& description() const override {
     return description_;
   }
 
-  PjRtClient* client() const override { return client_; }
+  PjRtClient* client() const override;
 
   bool IsAddressable() const override { return local_device_id_ != -1; }
 
@@ -189,8 +191,6 @@ class TfrtGpuDevice final : public PjRtDevice {
 
   absl::StatusOr<tsl::AllocatorStats> GetAllocatorStats() const override;
 
-  se::DeviceMemoryAllocator* allocator() const;
-
   // Returns a fresh, PRNG-generated random seed for an XLA computation.
   int GetNewPrngSeed();
 
@@ -209,7 +209,7 @@ class TfrtGpuDevice final : public PjRtDevice {
   absl::StatusOr<TransferManager*> GetTransferManager();
 
   int id_;
-  PjRtClient* client_ = nullptr;
+  TfrtGpuClient* client_ = nullptr;
   const PjRtLocalDeviceId local_device_id_;
   const PjRtLocalHardwareId local_hardware_id_;
   se::StreamExecutor* executor_;
@@ -261,6 +261,8 @@ class TfrtGpuClient final : public PjRtClient {
   int addressable_device_count() const override {
     return addressable_devices_.size();
   }
+
+  std::optional<PjRtPluginAttributes> plugin_attributes() const override;
 
   absl::Span<PjRtDevice* const> devices() const override { return devices_; }
 
@@ -546,7 +548,7 @@ class TfrtGpuBuffer final : public PjRtBuffer {
 
   void Delete() override;
 
-  bool IsDeleted() override;
+  bool IsDeleted() const override;
 
   absl::StatusOr<std::unique_ptr<PjRtBuffer>> CopyToMemorySpace(
       PjRtMemorySpace* dst_memory_space) override;
@@ -765,7 +767,7 @@ class TfrtGpuExecutable final : public PjRtLoadedExecutable {
 
   void Delete() override { executables_.clear(); }
 
-  bool IsDeleted() override { return executables_.empty(); }
+  bool IsDeleted() const override { return executables_.empty(); }
 
   absl::Span<const std::shared_ptr<LocalExecutable>> executables() const {
     return executables_;

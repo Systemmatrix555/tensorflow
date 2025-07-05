@@ -411,7 +411,6 @@ cc_library(
         "@local_xla//xla/backends/cpu/runtime:rng_state_lib",
         "@local_xla//xla:cpu_function_runtime",
         "@local_xla//xla:executable_run_options",
-        "@local_xla//xla/service/cpu:buffer_desc",
         "//tensorflow/core/platform:types",
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/strings:string_view",
@@ -940,6 +939,7 @@ cc_library(
         "//tensorflow/core:framework_internal",
         "//tensorflow/core:lib",
         "//tensorflow/core:protos_all_cc",
+        "@com_google_absl//absl/status",
         "@com_google_absl//absl/strings",
         "@local_xla//xla:status_macros",
         "@local_xla//xla/hlo/builder:sharding_builder",
@@ -956,6 +956,7 @@ tf_cc_test(
         "//tensorflow/core:test",
         "//tensorflow/core:test_main",
         "//tensorflow/core:testlib",
+        "@com_google_googletest//:gtest",
     ],
 )
 
